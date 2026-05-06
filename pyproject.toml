@@ -7,14 +7,19 @@ authors = [
     { name = "Y.Zhao", email = "zhaoyue722@gmail.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "sqlalchemy>=2.0",
+]
 
 [project.scripts]
-llm-usage-mcp = "llm_usage_mcp:main"
+llm-usage-mcp = "llm_usage:main"
 
 [build-system]
 requires = ["uv_build>=0.11.1,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "llm_usage"
 
 [dependency-groups]
 dev = [
