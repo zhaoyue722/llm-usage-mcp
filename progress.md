@@ -282,6 +282,53 @@ uv run pytest -q          # 20 passed (9 model + 5 migration + 6 session)
 - Pricing-data loader: read the vendored `prices.json` and upsert into `pricing_snapshot`.
 - Pydantic models for the MCP tool boundary (`record_usage` input/output, etc.).
 
+### 2026-05-06 — Pricing + CostCalculator (and a spec change: `cost_usd` → `cost_nano_usd`)
+
+#### Spec change first
+The original spec had `cost_usd REAL NOT NULL` on `usage_events`. While designing the calculator we changed the column to `cost_nano_usd INTEGER NOT NULL` (10⁻⁹ USD), and updated `docs/spec.md` accordingly. Reasons:
+
+- **Exact aggregate arithmetic.** `SUM(cost_nano_usd)` over millions of rows is exact integer math; float `SUM` accumulates rounding error.
+- **Sufficient resolution.** 1 cache-read token at $0.30/M ≈ $3 × 10⁻⁷ = 300 nano-USD. Cleanly representable. Cents would round to zero.
+- **Headroom.** SQLite INTEGER is 64-bit signed → max ~$9.2 B. Vastly more than any user's spend.
+- **Industry pattern.** Stripe/payment systems store money as integer minor units; nano-USD is just "go small enough for LLM micro-pricing".
+
+The MCP tool boundary still reports float `cost_usd: number`. The conversion is a single `cost_nano_usd / 1e9` at the edge — so end-users see human-friendly USD, and storage stays exact.
+
+#### Migration: `0002_cost_usd_to_cost_nano_usd`
+SQLite can't `ALTER COLUMN` types in place; the migration uses three batch_alter phases so existing rows survive:
+
+1. Add `cost_nano_usd INTEGER` (nullable, no default).
+2. `UPDATE usage_events SET cost_nano_usd = CAST(cost_usd * 1000000000 AS INTEGER)`.
+3. Tighten `cost_nano_usd` to `NOT NULL` and drop `cost_usd`.
+
+Downgrade is the symmetric reverse (`cost_nano_usd / 1000000000.0`). Verified manually with a real row of `cost_usd = 0.0042` round-tripping to `cost_nano_usd = 4_200_000` and back.
+
+#### `core/pricing.py`
+- **`Pricing`** — frozen dataclass. Rates kept as `float` (per-million-USD often has decimals like $3.75 or $0.30); `fetched_at` carried through so we can debug "why is today's cost different from yesterday's?". `Pricing.from_orm(PricingSnapshot)` does the ORM→dataclass conversion.
+- **`CostCalculator`** — bound to one `Pricing`. The single method is `cost_nano_usd(*, input_tokens, output_tokens, cache_write_tokens=0, cache_read_tokens=0) -> int`. The math is just `tokens × rate × 1_000` (rate is per-million-USD, ×1000 converts to per-token nano-USD), summed across the four token kinds, banker-rounded to int.
+- **`get_pricing(session, provider, model) -> Pricing | None`** — fetches the row from `pricing_snapshot`. Returns `None` when missing (the MCP layer's `record_usage` will translate that into the `warning` field per spec).
+
+#### Validation: strict on missing cache rates
+If `cache_write_tokens > 0` but `cache_write_per_million_usd` is `None` (or the same for cache_read), `cost_nano_usd` raises `ValueError`. Reason: this is always either stale pricing data or a buggy adapter — silently zeroing the contribution would undercount cost without surfacing the problem. The error message names the provider/model so the data issue is debuggable from the stack trace alone. `cache_*_tokens = 0` with a `None` rate is fine — the cache cost just contributes 0.
+
+Negative tokens also raise; we trust the calling code but not so much that we'll silently negate a refund.
+
+#### Test data: real Anthropic rates
+Tests use the actual Claude Sonnet 4.6 numbers ($3 / $15 / $3.75 / $0.30). They double as living documentation: a reader sees the typical magnitudes (cache-read is 0.10× input, cache-write is 1.25× input) without leaving the test file. The combined-session test mirrors the worked example we used to motivate caching: 100K cache-write + 900K cache-read + 1.5K input/output ≈ $0.6555 = 655_500_000 nano-USD.
+
+#### Verification
+```bash
+uv run ruff check .       # All checks passed!
+uv run ruff format --check .
+uv run mypy               # Success: no issues found in 12 source files
+uv run pytest -q          # 41 passed (9 model + 5 migration + 6 session + 21 pricing)
+```
+
+#### Open issues / follow-ups
+- Pricing-data loader: read vendored `prices.json` and upsert into `pricing_snapshot` (idempotent on `(provider, model)` PK; bumps `fetched_at` on each refresh).
+- `record_usage` MCP tool: wire token counts → `get_pricing` → `CostCalculator` → insert `UsageEvent`. Translate missing pricing into the spec's `warning` field.
+- A `llm-usage-mcp db upgrade` CLI subcommand.
+
 ---
 
 ## 中文版本
@@ -561,3 +608,50 @@ uv run pytest -q          # 20 passed（9 model + 5 migration + 6 session）
 - 一个 `llm-usage-mcp db upgrade` 子命令，封装 `alembic upgrade head`；外加一个保证 `~/.llm-usage/` 在首次迁移前存在的 `init` 步骤。
 - Pricing 数据加载器：把内置的 `prices.json` 读出来 upsert 到 `pricing_snapshot`。
 - MCP 工具边界用的 Pydantic 模型（`record_usage` 的入参/出参等）。
+
+### 2026-05-06 — Pricing + CostCalculator（顺带改了 spec：`cost_usd` → `cost_nano_usd`）
+
+#### 先说 spec 改动
+原本 spec 里 `usage_events` 的成本列是 `cost_usd REAL NOT NULL`。在设计 calculator 时把它改成了 `cost_nano_usd INTEGER NOT NULL`（10⁻⁹ USD），并同步更新了 `docs/spec.md`。原因：
+
+- **聚合算术精确**。`SUM(cost_nano_usd)` 在百万级行上是整数加法，精确无误；浮点 `SUM` 会累积误差。
+- **分辨率够用**。Anthropic 1 个 cache_read token 在 $0.30/M 下约等于 $3 × 10⁻⁷ = 300 nano-USD，干净可表示。如果用"分"做单位反而会被 round 成 0。
+- **数值上限充足**。SQLite INTEGER 是 64 位有符号 → 最大约 $9.2 B，远超任何用户的开销。
+- **业内惯例**。Stripe 和支付系统都把钱以"最小货币单位"的整数存。nano-USD 只是把单位调小到能表达 LLM 的微观计费。
+
+MCP 工具边界对外仍然返回 float `cost_usd: number`，到边界处一句 `cost_nano_usd / 1e9` 完成换算 —— 终端用户看到的还是好懂的 USD，存储层则是精确的整数。
+
+#### 迁移：`0002_cost_usd_to_cost_nano_usd`
+SQLite 不能直接 `ALTER COLUMN` 改类型，所以用三个 batch_alter 阶段，让已有数据安全过渡：
+
+1. 加 `cost_nano_usd INTEGER`（nullable，先不带默认）。
+2. `UPDATE usage_events SET cost_nano_usd = CAST(cost_usd * 1000000000 AS INTEGER)`。
+3. 把 `cost_nano_usd` 收紧到 `NOT NULL`，删掉 `cost_usd`。
+
+downgrade 对称反向（`cost_nano_usd / 1000000000.0`）。手动验证过：一行 `cost_usd = 0.0042` 升级后 `cost_nano_usd = 4_200_000`，下迁回去精确还原。
+
+#### `core/pricing.py`
+- **`Pricing`** —— 冻结 dataclass。费率仍然用 `float`（每百万 token USD 经常带小数，例如 $3.75、$0.30）；`fetched_at` 也带过来，方便回头查"为什么今天的成本和昨天不一样？"。`Pricing.from_orm(PricingSnapshot)` 负责 ORM→dataclass 的转换。
+- **`CostCalculator`** —— 绑一个 `Pricing` 实例。唯一对外方法是 `cost_nano_usd(*, input_tokens, output_tokens, cache_write_tokens=0, cache_read_tokens=0) -> int`。算式就是 `tokens × rate × 1_000`（rate 是每百万 USD，×1000 把它换成"每 token nano-USD"），四种 token 加起来，最后做银行家舍入到整数。
+- **`get_pricing(session, provider, model) -> Pricing | None`** —— 从 `pricing_snapshot` 里取一行。找不到时返回 `None`（后续 MCP 层 `record_usage` 会按 spec 把它翻译成 `warning` 字段）。
+
+#### 校验：cache 费率缺失时严格报错
+如果 `cache_write_tokens > 0` 而 `cache_write_per_million_usd` 是 `None`（cache_read 同理），`cost_nano_usd` 会抛 `ValueError`。原因：这种情况要么是 pricing 数据过期、要么是 adapter 写错了 —— 静默地把这部分 cost 当成 0 只会让账少算而完全不报警。错误消息会带上 provider/model，光看 stack trace 就能定位数据问题。`cache_*_tokens = 0` 配 `None` 费率是合法的 —— cache 那部分贡献就是 0。
+
+负数 token 也会报错；我们信任调用方，但不至于让一笔"反向退款"悄悄通过。
+
+#### 测试数据：用真实 Anthropic 费率
+测试里直接用 Claude Sonnet 4.6 的真实费率（$3 / $15 / $3.75 / $0.30）。这样测试同时也是活文档：读测试就能看到 cache 价格的实际量级（cache_read 是 input 的 0.10×，cache_write 是 input 的 1.25×）。组合场景测试就是我们解释 caching 时用的那个例子：100K cache_write + 900K cache_read + 1.5K input/output ≈ $0.6555 = 655_500_000 nano-USD。
+
+#### 验证
+```bash
+uv run ruff check .       # All checks passed!
+uv run ruff format --check .
+uv run mypy               # Success: no issues found in 12 source files
+uv run pytest -q          # 41 passed（9 model + 5 migration + 6 session + 21 pricing）
+```
+
+#### 待办 / 后续
+- Pricing 数据加载器：读取内置 `prices.json` 并 upsert 到 `pricing_snapshot`（按 `(provider, model)` 主键幂等；每次刷新更新 `fetched_at`）。
+- `record_usage` MCP 工具：把 token 数 → `get_pricing` → `CostCalculator` → 插入 `UsageEvent` 串起来。pricing 缺失时按 spec 写入 `warning` 字段。
+- `llm-usage-mcp db upgrade` 子命令。
