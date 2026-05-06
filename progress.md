@@ -128,6 +128,51 @@ Land the project's "agent context" docs so future Claude Code sessions in this r
 - **`plan.md` is truncated.** The Day 1 list ends at "Write plan.md with your Day 2–5 tasks as" and Day 2–5 is empty. Fill in.
 - **MCP `record_usage` tool spec mentions `cache_write_tokens` for input** — that's Anthropic-specific. Document in adapter reference how OpenAI/Qwen/DeepSeek map (already partially done; cross-link from `spec.md` once stable).
 
+### 2026-05-06 — SQLAlchemy models for the usage database
+
+#### Goal
+Land the persistence-layer schema. The spec lists three tables (`usage_events`, `pricing_snapshot`, `schema_version`) plus four indexes, but no Python code existed yet.
+
+#### Why models first, no engine yet
+The capture layer, pricing layer, and MCP-tools layer all read/write through these models. Defining them in SQLAlchemy 2.0 typed style — `DeclarativeBase` + `Mapped[...]` columns — makes them sync/async-agnostic, so the engine choice (sync `sqlite3` vs async `aiosqlite`) can be made independently when `db.py`'s session factory is added. Smaller diff, fewer commitments.
+
+#### Package rename: `llm_usage_mcp` → `llm_usage`
+The spec's repo layout puts the import package at `src/llm_usage/`, but the bootstrap had created `src/llm_usage_mcp/`. To match the spec verbatim:
+- `git mv src/llm_usage_mcp src/llm_usage`
+- Console-script entry retargeted: `llm-usage-mcp = "llm_usage:main"`.
+- The uv build backend infers the module name from the *project* name (`llm-usage-mcp` → `llm_usage_mcp`), so the build broke until `[tool.uv.build-backend] module-name = "llm_usage"` was added to `pyproject.toml`.
+- Existing smoke test updated to `from llm_usage import main`.
+
+The distribution name (`llm-usage-mcp`) is unchanged — only the import package moved.
+
+#### What landed
+- **`src/llm_usage/core/db.py`** — three models mirroring the spec:
+  - `UsageEvent` (table `usage_events`) — 16 columns, `id` primary key, four indexes.
+  - `PricingSnapshot` — composite primary key `(provider, model)`.
+  - `SchemaVersion` — single-column table; constant `CURRENT_SCHEMA_VERSION = 1`.
+- **`src/llm_usage/core/__init__.py`** — re-exports.
+- **`tests/test_models.py`** — nine tests covering table set, columns + nullability, index names + columns, partial unique on `request_id`, server-default behavior on raw INSERT, composite PK, and round-trip persistence.
+
+#### Design choices worth noting
+- **`metadata` column → Python attribute `event_metadata`.** SQLAlchemy reserves `Base.metadata`, so the column name stays `metadata` (per spec) but the ORM-side attribute is renamed to avoid the clash.
+- **Token defaults use both `default=0` and `server_default=text("0")`.** The spec says `NOT NULL DEFAULT 0` at the SQL layer, so a raw `INSERT` that omits the columns must still succeed. A test asserts that.
+- **Partial unique index on `request_id`** matches the spec (`UNIQUE WHERE request_id IS NOT NULL`) via `Index(..., unique=True, sqlite_where=text("request_id IS NOT NULL"))`. This is what enables idempotent recording — replaying a captured log won't double-count.
+- **`Float` instead of `REAL`.** `sqlalchemy.Float` is the cross-DB real type and renders as `REAL` on SQLite — same on-disk shape, more idiomatic in 2.0.
+- **No engine, no session factory yet.** Those belong in a separate change once the `~/.llm-usage/usage.db` path discovery and async story land together.
+
+#### Verification
+```bash
+uv run ruff check .       # All checks passed!
+uv run ruff format --check .
+uv run mypy               # Success: no issues found in 6 source files
+uv run pytest -q          # 9 passed
+```
+
+#### Open issues / follow-ups
+- Engine + session factory (`get_engine()`, `SessionLocal`) — next change.
+- Alembic init + initial revision so schema upgrades are tracked alongside `schema_version`.
+- A Pydantic mirror of `UsageEvent` for the MCP `record_usage` tool's input/output (the spec uses Pydantic types throughout the MCP layer).
+
 ---
 
 ## 中文版本
@@ -253,3 +298,48 @@ uv add --dev <pkg>             # 添加开发依赖
 - **Python 版本不一致**。`CLAUDE.md` 和 `spec.md` 说 *Python 3.11+*，但 `pyproject.toml` 固定为 `requires-python = ">=3.13"`，且 ruff/mypy 的 `target-version = "py313"`。选一个版本并把三处对齐。
 - **`plan.md` 被截断**。Day 1 列表停在 "Write plan.md with your Day 2–5 tasks as"，Day 2–5 为空。需要补全。
 - **MCP `record_usage` 工具中提到 `cache_write_tokens`** — 这其实是 Anthropic 特有概念。需在适配器参考文档中说明 OpenAI/Qwen/DeepSeek 的映射方式（已部分完成；待 `spec.md` 稳定后从 `spec.md` 互链）。
+
+### 2026-05-06 — 用法数据库的 SQLAlchemy 模型
+
+#### 目标
+把持久层 schema 落到代码里。spec 已经定义了三张表（`usage_events`、`pricing_snapshot`、`schema_version`）和四个索引，但仓库里还没有任何对应的 Python 代码。
+
+#### 为什么先建模型，暂不建 engine
+捕获层、定价层、MCP 工具层都通过这些模型读写。用 SQLAlchemy 2.0 的类型化风格（`DeclarativeBase` + `Mapped[...]`）定义出来，模型本身**对同步/异步无感**——后续 `db.py` 加 session 工厂时再决定用同步 `sqlite3` 还是异步 `aiosqlite` 都来得及。这样这次 PR 改动更小、承诺更少。
+
+#### 包重命名：`llm_usage_mcp` → `llm_usage`
+spec 的仓库布局把 import 包定在 `src/llm_usage/`，而项目骨架最初创建的是 `src/llm_usage_mcp/`。为了**与 spec 完全对齐**：
+- `git mv src/llm_usage_mcp src/llm_usage`
+- 控制台脚本入口改为：`llm-usage-mcp = "llm_usage:main"`。
+- uv 的 build backend 默认按*项目名*推断模块名（`llm-usage-mcp` → `llm_usage_mcp`），所以构建会失败，直到在 `pyproject.toml` 加上 `[tool.uv.build-backend] module-name = "llm_usage"` 才修复。
+- 现有冒烟测试改为 `from llm_usage import main`。
+
+发行包名（`llm-usage-mcp`）保持不变——只是 import 包的目录名变了。
+
+#### 本次落地的内容
+- **`src/llm_usage/core/db.py`** —— 三个模型，与 spec 一一对应：
+  - `UsageEvent`（表 `usage_events`）—— 16 列，`id` 为主键，四个索引。
+  - `PricingSnapshot` —— 复合主键 `(provider, model)`。
+  - `SchemaVersion` —— 单列表；常量 `CURRENT_SCHEMA_VERSION = 1`。
+- **`src/llm_usage/core/__init__.py`** —— 公开导出。
+- **`tests/test_models.py`** —— 9 个测试，覆盖：表集合、列与可空性、索引名与索引列、`request_id` 的部分唯一约束、原生 INSERT 时 server-default 是否生效、复合主键、读写往返。
+
+#### 几个值得说明的设计选择
+- **`metadata` 列 → Python 属性名 `event_metadata`**。SQLAlchemy 在 `Base` 上保留了 `metadata` 名字，所以列名按 spec 仍叫 `metadata`，但 ORM 这边的属性改名为 `event_metadata` 以避开冲突。
+- **Token 默认值同时设了 `default=0` 和 `server_default=text("0")`**。spec 在 SQL 层写的是 `NOT NULL DEFAULT 0`，所以即便有人**绕过 ORM 写原生 SQL** 并省略这些列，也必须能成功插入。有专门的测试覆盖这一点。
+- **`request_id` 的部分唯一索引**严格对应 spec 的 `UNIQUE WHERE request_id IS NOT NULL`，通过 `Index(..., unique=True, sqlite_where=text("request_id IS NOT NULL"))` 实现。这正是**幂等记录**的关键——回放抓取的日志不会重复计数。
+- **用 `Float` 而不是 `REAL`**。`sqlalchemy.Float` 是跨数据库的浮点类型，在 SQLite 上渲染成 `REAL`，存储形态完全一样，但在 SQLAlchemy 2.0 里更地道。
+- **暂不创建 engine 与 session 工厂**。等到 `~/.llm-usage/usage.db` 路径解析与异步方案一起落地时再做。
+
+#### 验证
+```bash
+uv run ruff check .       # All checks passed!
+uv run ruff format --check .
+uv run mypy               # Success: no issues found in 6 source files
+uv run pytest -q          # 9 passed
+```
+
+#### 待办 / 后续
+- Engine 与 session 工厂（`get_engine()`、`SessionLocal`）—— 下一个 PR。
+- Alembic 初始化以及第一版 revision，让 schema 升级和 `schema_version` 一起被纳入版本控制。
+- 给 `UsageEvent` 配一个 Pydantic 镜像类型，供 MCP `record_usage` 工具的入参/出参使用（spec 中 MCP 层都用 Pydantic）。

@@ -1,4 +1,4 @@
-from llm_usage_mcp import main
+from llm_usage import main
 
 
 def test_main_runs() -> None:
