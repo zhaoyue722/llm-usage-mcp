@@ -7,30 +7,19 @@ TABLE migrations work via Alembic's batch mode.
 
 from __future__ import annotations
 
-import os
 from logging.config import fileConfig
-from pathlib import Path
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from llm_usage.core import Base
+from llm_usage.core import Base, resolve_db_url
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-
-def _resolve_db_url() -> str:
-    env_url = os.environ.get("LLM_USAGE_DB_URL")
-    if env_url:
-        return env_url
-    default_path = Path.home() / ".llm-usage" / "usage.db"
-    return f"sqlite:///{default_path}"
-
-
-config.set_main_option("sqlalchemy.url", _resolve_db_url())
+config.set_main_option("sqlalchemy.url", resolve_db_url())
 
 target_metadata = Base.metadata
 
