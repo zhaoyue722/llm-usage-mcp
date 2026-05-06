@@ -236,6 +236,52 @@ uv run pytest -q          # 14 passed
 - A `llm-usage-mcp db upgrade` CLI subcommand that wraps `alembic upgrade head` for end-users.
 - A pricing-data loader that populates `pricing_snapshot` from the vendored `prices.json` on first run.
 
+### 2026-05-06 — Engine + session factory (sync), shared with Alembic
+
+#### Goal
+Land the runtime side of the persistence layer: an engine factory, a process-wide session, and SQLite WAL tuning. Sync only — async deferred until the FastAPI capture proxy actually starts.
+
+#### Why sync now
+SQLite is single-writer, so async wouldn't actually parallelize writes; its real benefit is "don't block the event loop". Today's callers (MCP tools, smoke tests) aren't on an event loop, and the FastAPI proxy is spec'd but not built. Sync today is dramatically simpler to write/test/debug; SQLAlchemy 2.0 lets us add `AsyncSession` against the **same models and same engine URL** later without a model rewrite. If/when the proxy lands, the right move is "add async alongside sync" — starting sync doesn't paint us into a corner.
+
+#### Layout change: `core/db.py` → `core/db/` package
+- `core/db/models.py` — moved verbatim from the old `core/db.py`.
+- `core/db/session.py` — new: `resolve_db_url`, `create_engine`, `get_engine`, `get_session_factory`, `get_session`, `DEFAULT_DB_PATH`.
+- `core/db/__init__.py` — re-exports both modules so existing `from llm_usage.core import ...` keeps working.
+
+The spec puts both models and session in a single `db.py`; we split because `db.py` was already at 100+ lines and adding the engine plumbing would have pushed it past comfortable file size. Public import path (`from llm_usage.core import ...`) is unchanged.
+
+#### What `session.py` provides
+- **`resolve_db_url()`** — env var `LLM_USAGE_DB_URL` first, default `sqlite:///~/.llm-usage/usage.db`. **Now shared with `alembic/env.py`** so app code and migrations always talk to the same database. Removed the duplicate helper from `env.py`.
+- **`create_engine(url=None)`** — factory. For file-backed SQLite URLs, ensures the parent dir exists (so first run on a clean machine doesn't crash) and registers a `connect` listener.
+- **WAL pragma listener** — on every connect to a file-backed SQLite engine, runs `PRAGMA journal_mode=WAL` and `PRAGMA synchronous=NORMAL`. Standard pairing: WAL gives concurrent reads during writes; NORMAL skips fsync per commit (fsync still happens at WAL checkpoint), which is the durability sweet spot for a local dev tool. In-memory and non-SQLite URLs skip both behaviors.
+- **`get_engine()` / `get_session_factory()` / `get_session()`** — lazy module-level singletons. First call builds; subsequent calls reuse.
+
+#### Tests (`tests/test_session.py`)
+Six passing tests:
+1. `resolve_db_url` default path.
+2. `resolve_db_url` env-var override.
+3. `create_engine` creates parent directories for nested DB paths.
+4. WAL mode + `synchronous=NORMAL` are actually applied on connect (the asserts read `PRAGMA journal_mode` and `PRAGMA synchronous`).
+5. In-memory URLs (`sqlite:///:memory:`) skip WAL — `journal_mode` reports `memory`, not `wal`.
+6. **End-to-end smoke test**: insert a `UsageEvent`, query it back, asserts the round-tripped row matches.
+
+#### Test plumbing worth noting
+The smoke test exercises the lazy singleton path (`get_engine`, `get_session_factory`). To do that without leaking a SQLite connection pool across tests — which `filterwarnings = ["error"]` would turn into a fatal `PytestUnraisableExceptionWarning` when the pool is later GC'd — there's a `reset_session_singletons` fixture that nulls and disposes the module globals around each test.
+
+#### Verification
+```bash
+uv run ruff check .       # All checks passed!
+uv run ruff format --check .
+uv run mypy               # Success: no issues found in 10 source files
+uv run pytest -q          # 20 passed (9 model + 5 migration + 6 session)
+```
+
+#### Open issues / follow-ups
+- A `llm-usage-mcp db upgrade` CLI subcommand wrapping `alembic upgrade head`, plus an `init` step that ensures `~/.llm-usage/` exists before first migration.
+- Pricing-data loader: read the vendored `prices.json` and upsert into `pricing_snapshot`.
+- Pydantic models for the MCP tool boundary (`record_usage` input/output, etc.).
+
 ---
 
 ## 中文版本
@@ -469,3 +515,49 @@ uv run pytest -q          # 14 passed
 - engine 与 session 工厂，以及一个和 `env.py` 解析方式一致的 `db_path()` 助手（让应用代码和 Alembic 用同一个文件）。
 - 一个 `llm-usage-mcp db upgrade` 子命令，对终端用户封装 `alembic upgrade head`。
 - 在首次启动时把内置 `prices.json` 加载进 `pricing_snapshot` 的 loader。
+
+### 2026-05-06 — Engine 与 session 工厂（同步），与 Alembic 共用 URL
+
+#### 目标
+把持久层的运行时部分落到代码里：engine 工厂、进程级 session、以及 SQLite WAL 调优。**只做同步**——异步等到 FastAPI capture 代理真的开始动工再说。
+
+#### 为什么先做同步
+SQLite 是单写者数据库，async 并不能让写并行起来；它真正的价值是"别堵住 event loop"。当前的调用方（MCP 工具、冒烟测试）都不在 event loop 上，FastAPI 代理在 spec 里有但还没建。同步代码在写、测、调试上都更简单；SQLAlchemy 2.0 后续要加 `AsyncSession` 完全可以**复用同一套模型和同一个 URL**，不需要重写模型。等代理真正落地时，正确的做法是"在同步旁边再加一套异步"——先做同步并不会把自己堵死。
+
+#### 目录调整：`core/db.py` → `core/db/` 包
+- `core/db/models.py` —— 从原 `core/db.py` 原样搬过来。
+- `core/db/session.py` —— 新增：`resolve_db_url`、`create_engine`、`get_engine`、`get_session_factory`、`get_session`、`DEFAULT_DB_PATH`。
+- `core/db/__init__.py` —— 把两个模块的公开 API 都重新导出，所以现有 `from llm_usage.core import ...` 用法保持不变。
+
+spec 把模型和 session 都塞在一个 `db.py` 里；我们拆开是因为 `db.py` 已经 100 行打底了，再塞 engine 相关代码就会撑得不太舒服。对外 import 路径 (`from llm_usage.core import ...`) 完全不变。
+
+#### `session.py` 提供了什么
+- **`resolve_db_url()`** —— 先看环境变量 `LLM_USAGE_DB_URL`，否则按 spec 默认到 `sqlite:///~/.llm-usage/usage.db`。**现在和 `alembic/env.py` 共用同一个函数**，保证应用代码和迁移指向同一个数据库；`env.py` 里那份重复实现已经删掉。
+- **`create_engine(url=None)`** —— 工厂函数。对于文件型 SQLite URL，会确保父目录存在（这样在干净机器上首次运行不会因为目录不在而崩），并注册 `connect` 监听器。
+- **WAL pragma 监听器** —— 每次 connect 到文件型 SQLite engine 时，跑 `PRAGMA journal_mode=WAL` 和 `PRAGMA synchronous=NORMAL`。这是标准搭配：WAL 让写期间还能并发读；NORMAL 跳过每次 commit 的 fsync（fsync 在 WAL checkpoint 时仍会发生），对本地开发工具来说是耐久性和性能的甜点。In-memory 和非 SQLite URL 都会跳过这两步。
+- **`get_engine()` / `get_session_factory()` / `get_session()`** —— 模块级懒加载单例。首次调用构建，后续复用。
+
+#### 测试（`tests/test_session.py`）
+6 个测试全部通过：
+1. `resolve_db_url` 默认路径正确。
+2. `resolve_db_url` 能被环境变量覆盖。
+3. `create_engine` 在嵌套路径下会自动创建父目录。
+4. WAL 模式与 `synchronous=NORMAL` 在 connect 时确实生效（断言读 `PRAGMA journal_mode` 和 `PRAGMA synchronous`）。
+5. In-memory URL（`sqlite:///:memory:`）不会上 WAL —— `journal_mode` 报的是 `memory` 而不是 `wal`。
+6. **端到端冒烟**：插入一条 `UsageEvent`，再查回来，断言读出来的字段和写进去的一致。
+
+#### 一个值得记的测试细节
+冒烟测试要走懒加载单例（`get_engine`、`get_session_factory`）这条路径。直接走的话，全局 SQLite 连接池会跨测试存活，被 GC 回收时会触发 `PytestUnraisableExceptionWarning`，而 `filterwarnings = ["error"]` 会把这个警告升级成致命错误。所以专门写了一个 `reset_session_singletons` fixture，在每个测试前后把模块级单例置空并 dispose。
+
+#### 验证
+```bash
+uv run ruff check .       # All checks passed!
+uv run ruff format --check .
+uv run mypy               # Success: no issues found in 10 source files
+uv run pytest -q          # 20 passed（9 model + 5 migration + 6 session）
+```
+
+#### 待办 / 后续
+- 一个 `llm-usage-mcp db upgrade` 子命令，封装 `alembic upgrade head`；外加一个保证 `~/.llm-usage/` 在首次迁移前存在的 `init` 步骤。
+- Pricing 数据加载器：把内置的 `prices.json` 读出来 upsert 到 `pricing_snapshot`。
+- MCP 工具边界用的 Pydantic 模型（`record_usage` 的入参/出参等）。
