@@ -55,7 +55,7 @@ def test_usage_events_columns(engine: Engine) -> None:
         "output_tokens",
         "cache_write_tokens",
         "cache_read_tokens",
-        "cost_usd",
+        "cost_nano_usd",
         "duration_ms",
         "success",
         "error_type",
@@ -79,7 +79,7 @@ def test_usage_events_columns(engine: Engine) -> None:
         "output_tokens",
         "cache_write_tokens",
         "cache_read_tokens",
-        "cost_usd",
+        "cost_nano_usd",
         "success",
     ):
         assert cols[col_name]["nullable"] is False, col_name
@@ -114,7 +114,7 @@ def test_request_id_uniqueness_is_partial(engine: Engine) -> None:
                 timestamp=1,
                 provider="anthropic",
                 model="claude-sonnet-4-6",
-                cost_usd=0.0,
+                cost_nano_usd=0,
             )
         )
         session.add(
@@ -123,7 +123,7 @@ def test_request_id_uniqueness_is_partial(engine: Engine) -> None:
                 timestamp=2,
                 provider="anthropic",
                 model="claude-sonnet-4-6",
-                cost_usd=0.0,
+                cost_nano_usd=0,
             )
         )
         session.commit()
@@ -134,7 +134,7 @@ def test_request_id_uniqueness_is_partial(engine: Engine) -> None:
                 timestamp=3,
                 provider="openai",
                 model="gpt-4o",
-                cost_usd=0.0,
+                cost_nano_usd=0,
                 request_id="req-1",
             )
         )
@@ -146,7 +146,7 @@ def test_request_id_uniqueness_is_partial(engine: Engine) -> None:
                 timestamp=4,
                 provider="openai",
                 model="gpt-4o",
-                cost_usd=0.0,
+                cost_nano_usd=0,
                 request_id="req-1",
             )
         )
@@ -161,9 +161,9 @@ def test_token_defaults_apply_on_raw_insert(engine: Engine) -> None:
         raw = conn.connection.driver_connection
         assert isinstance(raw, sqlite3.Connection)
         raw.execute(
-            "INSERT INTO usage_events (id, timestamp, provider, model, cost_usd) "
+            "INSERT INTO usage_events (id, timestamp, provider, model, cost_nano_usd) "
             "VALUES (?, ?, ?, ?, ?)",
-            ("evt-1", 1, "openai", "gpt-4o", 0.0),
+            ("evt-1", 1, "openai", "gpt-4o", 0),
         )
         row = raw.execute(
             "SELECT input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, success "

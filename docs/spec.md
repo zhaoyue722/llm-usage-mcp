@@ -137,7 +137,7 @@ CREATE TABLE usage_events (
     output_tokens   INTEGER NOT NULL DEFAULT 0,
     cache_write_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
-    cost_usd        REAL NOT NULL,             -- pre-computed at insert
+    cost_nano_usd   INTEGER NOT NULL,           -- nano-USD (10^-9), pre-computed at insert
     duration_ms     INTEGER,
     success         INTEGER NOT NULL DEFAULT 1,
     error_type      TEXT,
@@ -171,7 +171,7 @@ INSERT INTO schema_version VALUES (1);
 **Why these specific design choices**:
 
 - **`request_id` UNIQUE WHERE NOT NULL**: enables idempotent recording — your AWS billing reflex applied here. Replaying a log file won't double-count.
-- **`cost_usd` precomputed at insert**: snapshot pricing at the moment of the call. Pricing changes don't retroactively rewrite history. (Event-sourcing principle.)
+- **`cost_nano_usd` (INTEGER nano-USD = 10⁻⁹ USD), precomputed at insert**: snapshot pricing at the moment of the call. Pricing changes don't retroactively rewrite history. (Event-sourcing principle.) Stored as integer for exact aggregate arithmetic — `SUM(cost_nano_usd)` over millions of rows never drifts. MCP tools convert to float USD at the API boundary (`cost_nano_usd / 1e9`).
 - **`tags` and `metadata` as JSON columns**: SQLite supports JSON1 extension; query with `json_extract(...)`. Keeps schema small.
 - **`project`** as a top-level column (not in metadata): it's a primary group-by axis; deserves an index.
 
@@ -204,7 +204,7 @@ parameters:
   metadata:        object  optional
 returns:
   id:              string              # uuid of the recorded event
-  cost_usd:        number              # computed cost
+  cost_usd:        number              # computed cost in float USD (cost_nano_usd / 1e9)
   warning:         string|null         # e.g. "model not in pricing table; cost set to 0"
 ```
 

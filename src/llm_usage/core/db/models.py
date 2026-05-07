@@ -2,7 +2,7 @@
 
 Schema mirrors `docs/spec.md` verbatim. Three tables:
 
-- `usage_events`     one row per LLM call, with pre-computed `cost_usd`.
+- `usage_events`     one row per LLM call, with pre-computed `cost_nano_usd`.
 - `pricing_snapshot` materialized view of the vendored pricing JSON.
 - `schema_version`   single-row table holding the active schema version.
 
@@ -30,7 +30,11 @@ class Base(DeclarativeBase):
 
 
 class UsageEvent(Base):
-    """One LLM API call. `cost_usd` is snapshotted at insert time."""
+    """One LLM API call. `cost_nano_usd` is snapshotted at insert time.
+
+    Cost is stored in nano-USD (10^-9 USD) as INTEGER for exact aggregate
+    arithmetic. Convert to float USD at API boundaries via `cost_nano_usd / 1e9`.
+    """
 
     __tablename__ = "usage_events"
 
@@ -50,7 +54,7 @@ class UsageEvent(Base):
     cache_read_tokens: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
-    cost_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    cost_nano_usd: Mapped[int] = mapped_column(Integer, nullable=False)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     success: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("1")
