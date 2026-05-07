@@ -112,7 +112,7 @@ def test_insert_and_query_round_trip(
                 model="claude-sonnet-4-6",
                 input_tokens=100,
                 output_tokens=200,
-                cost_usd=0.0042,
+                cost_nano_usd=4_200_000,
             )
         )
         session.commit()
@@ -123,6 +123,7 @@ def test_insert_and_query_round_trip(
         assert event.provider == "anthropic"
         assert event.input_tokens == 100
         assert event.output_tokens == 200
-        assert event.cost_usd == pytest.approx(0.0042)
+        # 0.0042 USD = 4_200_000 nano-USD, exact integer.
+        assert event.cost_nano_usd == 4_200_000
         # success defaults to True per the spec.
         assert event.success is True
