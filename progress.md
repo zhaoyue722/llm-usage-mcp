@@ -329,6 +329,75 @@ uv run pytest -q          # 41 passed (9 model + 5 migration + 6 session + 21 pr
 - `record_usage` MCP tool: wire token counts → `get_pricing` → `CostCalculator` → insert `UsageEvent`. Translate missing pricing into the spec's `warning` field.
 - A `llm-usage-mcp db upgrade` CLI subcommand.
 
+### 2026-05-07 — Vendored pricing data (LiteLLM JSON, trimmed)
+
+#### Goal
+Land the source of truth for pricing — `src/llm_usage/core/pricing_data/prices.json` — so the upcoming loader has data to populate `pricing_snapshot` from.
+
+#### Source
+LiteLLM's [`model_prices_and_context_window_backup.json`](https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/model_prices_and_context_window_backup.json) — the same file LiteLLM uses internally for cost tracking. Spec called this out as the convention to follow ("the `model_prices.json` pattern that LiteLLM uses"). Refreshed weekly (manually for now; a GitHub Action is on the roadmap).
+
+#### Why vendor LiteLLM's shape verbatim
+Refresh stays a one-liner (download → `jq` filter → commit). Conversion to our `pricing_snapshot` shape happens once at load time in the loader; the committed JSON stays compatible with anyone else who parses LiteLLM data. We pay the conversion cost once, not on every refresh.
+
+#### Filter applied
+```jq
+to_entries
+| map(select(
+    (.value.litellm_provider == "anthropic" or
+     .value.litellm_provider == "openai" or
+     .value.litellm_provider == "deepseek" or
+     .value.litellm_provider == "dashscope")
+    and (.value.mode == "chat" or .value.mode == "responses")
+    and (.value | has("input_cost_per_token") or has("tiered_pricing"))
+  ))
+| from_entries
+```
+
+- **Providers**: anthropic, openai, deepseek, dashscope (Alibaba's API, the v1 path for Qwen). LiteLLM also exposes Anthropic via Bedrock and Vertex; v1 scope is direct provider APIs only, so those are excluded.
+- **Modes**: `chat` and `responses` (OpenAI's Responses API). Embeddings, audio, image, moderation, video are excluded — pricing for those doesn't fit a per-million-token shape.
+- **No-pricing entries**: dropped two metadata-only rows (`dashscope/qwen3-30b-a3b`, `openai/container`) that LiteLLM keeps for context but provides no rates for.
+
+Final tally: **178 models**, ~150 KB. Per provider: anthropic 20, dashscope 32, deepseek 8, openai 118.
+
+#### Tiered pricing oddity
+A handful of Qwen models use `tiered_pricing` (a list of `{range, input_cost_per_token, output_cost_per_token}`) instead of flat rates — Alibaba bills different rates above token-count thresholds. The structural test allows either shape; the loader will need to pick a base rate (likely the first tier) when populating `pricing_snapshot`. Anthropic's `*_above_200k_tokens` variants are similar but show up alongside flat rates and are simpler to handle (use the flat rate; ignore the tier).
+
+#### Files
+- `src/llm_usage/core/pricing_data/prices.json` — the trimmed payload.
+- `src/llm_usage/core/pricing_data/__init__.py` — empty; makes the directory a regular package so `importlib.resources.files(...)` resolves consistently across install layouts.
+- `src/llm_usage/core/pricing_data/README.md` — source URL, filter recipe, schema notes (LiteLLM's per-token field names → our per-million-USD rates), provider-specific quirks for the loader.
+
+Verified the data ships in the wheel:
+```
+$ uv build
+$ unzip -l dist/llm_usage_mcp-0.1.0-py3-none-any.whl | grep pricing_data
+   ... llm_usage/core/pricing_data/__init__.py
+   ... llm_usage/core/pricing_data/README.md
+   ... llm_usage/core/pricing_data/prices.json
+```
+
+#### Tests (`tests/test_prices_json.py`)
+6 structural tests, all passing. Don't validate prices for correctness (rates change weekly); catch the file going corrupt, missing a v1 provider, broadening beyond v1 (drift guard), or losing the LiteLLM shape:
+1. File parses; non-empty; has at least 50 models.
+2. All four v1 providers present.
+3. **No** unexpected providers (so a future broaden-the-filter mistake is caught).
+4. Every entry has `litellm_provider` + either flat or tiered pricing fields.
+5. Every entry's `mode` is `chat` or `responses`.
+6. Anthropic models that advertise `supports_prompt_caching` carry **both** `cache_creation_input_token_cost` and `cache_read_input_token_cost`.
+
+#### Verification
+```bash
+uv run ruff check .       # All checks passed!
+uv run ruff format --check .
+uv run mypy               # Success: no issues found in 13 source files
+uv run pytest -q          # 47 passed
+```
+
+#### Open issues / follow-ups
+- Pricing loader: parse `prices.json`, convert per-token to per-million-USD, handle tiered pricing's first tier, upsert to `pricing_snapshot`. Skip entries without `cache_creation_input_token_cost` for `cache_write_per_million_usd` (OpenAI/DeepSeek absorb the write cost).
+- GitHub Action that re-runs the `jq` filter weekly and opens a PR with the diff.
+
 ---
 
 ## 中文版本
@@ -655,3 +724,72 @@ uv run pytest -q          # 41 passed（9 model + 5 migration + 6 session + 21 p
 - Pricing 数据加载器：读取内置 `prices.json` 并 upsert 到 `pricing_snapshot`（按 `(provider, model)` 主键幂等；每次刷新更新 `fetched_at`）。
 - `record_usage` MCP 工具：把 token 数 → `get_pricing` → `CostCalculator` → 插入 `UsageEvent` 串起来。pricing 缺失时按 spec 写入 `warning` 字段。
 - `llm-usage-mcp db upgrade` 子命令。
+
+### 2026-05-07 — 把 LiteLLM 的定价 JSON 内置进来（裁剪后）
+
+#### 目标
+落地"定价数据的源头"：`src/llm_usage/core/pricing_data/prices.json`。后续的 loader 可以从这里读出来灌进 `pricing_snapshot`。
+
+#### 来源
+LiteLLM 的 [`model_prices_and_context_window_backup.json`](https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/model_prices_and_context_window_backup.json) —— LiteLLM 自己内部做成本追踪用的也是这个文件。spec 早就钦点了这个约定（"按 LiteLLM 的 `model_prices.json` 模式来"）。每周刷新一次（暂时手动；GitHub Action 排在路线图里）。
+
+#### 为什么原样保留 LiteLLM 的字段结构
+刷新工序就是一行命令（下载 → `jq` 过滤 → 提交）。等到要往 `pricing_snapshot` 里灌的时候，由 loader 在加载时做一次字段换算就行；提交进来的 JSON 仍然兼容任何其他解析 LiteLLM 数据的工具。换算成本只付一次，而不是每次刷新都付。
+
+#### 应用的过滤规则
+```jq
+to_entries
+| map(select(
+    (.value.litellm_provider == "anthropic" or
+     .value.litellm_provider == "openai" or
+     .value.litellm_provider == "deepseek" or
+     .value.litellm_provider == "dashscope")
+    and (.value.mode == "chat" or .value.mode == "responses")
+    and (.value | has("input_cost_per_token") or has("tiered_pricing"))
+  ))
+| from_entries
+```
+
+- **Provider**：anthropic、openai、deepseek、dashscope（阿里云的 API，也是 Qwen 在 v1 走的路径）。LiteLLM 还有 Anthropic via Bedrock、via Vertex 等，但 v1 范围只包含 Provider 直接 API，那些先排除。
+- **Mode**：`chat` 和 `responses`（OpenAI 的 Responses API）。Embeddings、音频、图像、moderation、视频全部排除——它们的定价不是"每百万 token"形式。
+- **完全没有定价的条目**：丢掉了两条只有元数据没有费率的（`dashscope/qwen3-30b-a3b`、`openai/container`）。LiteLLM 留着这些做参考，但 loader 反正也定不了价。
+
+最终：**178 个模型**，约 150 KB。各家分布：anthropic 20、dashscope 32、deepseek 8、openai 118。
+
+#### 阶梯定价的小怪
+有几款 Qwen 模型用的是 `tiered_pricing`（一个 `{range, input_cost_per_token, output_cost_per_token}` 列表）而不是平直费率——阿里在不同 token 数阈值之上收不同价。结构性测试两种格式都允许；loader 后续要从中挑一档基准价（大概率取第一档）灌进 `pricing_snapshot`。Anthropic 的 `*_above_200k_tokens` 也是类似的阶梯，但它跟平直费率一起出现，处理起来简单得多（直接用平直那档，阶梯的字段忽略）。
+
+#### 文件
+- `src/llm_usage/core/pricing_data/prices.json` —— 裁剪后的载荷。
+- `src/llm_usage/core/pricing_data/__init__.py` —— 空文件；让目录变成正式 package，`importlib.resources.files(...)` 在不同安装布局下都能稳定解析到。
+- `src/llm_usage/core/pricing_data/README.md` —— 源地址、过滤命令、字段含义说明（LiteLLM 的 per-token → 我们的 per-million-USD）、Provider 各自的小坑给 loader 看。
+
+确认数据真的随 wheel 一起发布：
+```
+$ uv build
+$ unzip -l dist/llm_usage_mcp-0.1.0-py3-none-any.whl | grep pricing_data
+   ... llm_usage/core/pricing_data/__init__.py
+   ... llm_usage/core/pricing_data/README.md
+   ... llm_usage/core/pricing_data/prices.json
+```
+
+#### 测试（`tests/test_prices_json.py`）
+6 个结构性测试，全部通过。**不**校验价格是否准确（每周变动），只防三件事：文件损坏、漏了 v1 Provider、过滤范围被无意中放宽（drift 守门员），以及 LiteLLM 字段结构变了：
+1. 文件能被解析；非空；至少 50 个模型。
+2. 四家 v1 Provider 都在。
+3. **不出现**额外 Provider（防止后续有人不小心放宽过滤）。
+4. 每个条目都有 `litellm_provider`，并且有平直或阶梯定价之一。
+5. 每个条目的 `mode` 都是 `chat` 或 `responses`。
+6. 凡是 Anthropic 中标了 `supports_prompt_caching` 的模型，都同时有 `cache_creation_input_token_cost` 和 `cache_read_input_token_cost`。
+
+#### 验证
+```bash
+uv run ruff check .       # All checks passed!
+uv run ruff format --check .
+uv run mypy               # Success: no issues found in 13 source files
+uv run pytest -q          # 47 passed
+```
+
+#### 待办 / 后续
+- Pricing loader：解析 `prices.json`、把 per-token 换成 per-million-USD、处理阶梯定价取第一档、upsert 到 `pricing_snapshot`。如果某条目没有 `cache_creation_input_token_cost`，`cache_write_per_million_usd` 设成 `None`（OpenAI / DeepSeek 把 cache write 成本吃了）。
+- GitHub Action：每周自动重跑 `jq` 过滤，把 diff 提一个 PR。
