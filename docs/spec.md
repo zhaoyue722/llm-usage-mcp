@@ -63,7 +63,7 @@ Each of these is a Year-2 feature.
 
 | Layer | Choice | Why |
 |---|---|---|
-| Language | **Python 3.11+** | MCP SDK is best-in-class; LLM SDKs are first-class; faster to ship |
+| Language | **Python 3.13+** | MCP SDK is best-in-class; LLM SDKs are first-class; faster to ship |
 | Package manager | **uv** | Fast, modern, and the course mentor's standard |
 | MCP framework | **Official `mcp` package** | Don't roll your own |
 | HTTP framework (proxy) | **FastAPI + Uvicorn** | Battle-tested, async, streaming support |
