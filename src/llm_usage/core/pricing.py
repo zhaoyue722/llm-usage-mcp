@@ -15,8 +15,10 @@ The MCP layer converts to float USD at the API boundary.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from llm_usage.core.db.models import PricingSnapshot
@@ -139,3 +141,53 @@ def get_pricing(session: Session, provider: str, model: str) -> Pricing | None:
     if row is None:
         return None
     return Pricing.from_orm(row)
+
+
+def upsert_pricing(session: Session, pricings: Iterable[Pricing]) -> int:
+    """Idempotently write `Pricing` records into `pricing_snapshot`.
+
+    Uses SQLite's `INSERT ... ON CONFLICT (provider, model) DO UPDATE` so
+    re-running with the same input refreshes `fetched_at` and any changed
+    rates without producing duplicate rows. Returns the count of input
+    records processed (insert + update combined). Does not commit — the
+    caller owns the transaction, matching `get_pricing`'s convention.
+
+    `fetched_at` is required (the column is NOT NULL); a `None` value
+    surfaces as `ValueError` rather than being silently stamped with
+    `now`. Validation runs before the INSERT, so an invalid row in the
+    batch aborts the whole call (no partial write).
+    """
+    rows: list[dict[str, object]] = []
+    for p in pricings:
+        if p.fetched_at is None:
+            raise ValueError(
+                f"Pricing for {p.provider}/{p.model} is missing fetched_at; "
+                f"the column is NOT NULL in pricing_snapshot"
+            )
+        rows.append(
+            {
+                "provider": p.provider,
+                "model": p.model,
+                "input_per_million_usd": p.input_per_million_usd,
+                "output_per_million_usd": p.output_per_million_usd,
+                "cache_write_per_million_usd": p.cache_write_per_million_usd,
+                "cache_read_per_million_usd": p.cache_read_per_million_usd,
+                "fetched_at": p.fetched_at,
+            }
+        )
+    if not rows:
+        return 0
+
+    stmt = sqlite_insert(PricingSnapshot).values(rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["provider", "model"],
+        set_={
+            "input_per_million_usd": stmt.excluded.input_per_million_usd,
+            "output_per_million_usd": stmt.excluded.output_per_million_usd,
+            "cache_write_per_million_usd": stmt.excluded.cache_write_per_million_usd,
+            "cache_read_per_million_usd": stmt.excluded.cache_read_per_million_usd,
+            "fetched_at": stmt.excluded.fetched_at,
+        },
+    )
+    session.execute(stmt)
+    return len(rows)
