@@ -398,6 +398,81 @@ uv run pytest -q          # 47 passed
 - Pricing loader: parse `prices.json`, convert per-token to per-million-USD, handle tiered pricing's first tier, upsert to `pricing_snapshot`. Skip entries without `cache_creation_input_token_cost` for `cache_write_per_million_usd` (OpenAI/DeepSeek absorb the write cost).
 - GitHub Action that re-runs the `jq` filter weekly and opens a PR with the diff.
 
+### 2026-05-11 — Pricing loader (LiteLLM JSON → internal `Pricing`)
+
+#### What this change is, in one paragraph
+We **vendor** (= "ship a copy inside our own package") a JSON file from another project — LiteLLM's `model_prices...json` — that lists prices for every LLM. The file uses LiteLLM's own field names and unit conventions (per-token USD, a `litellm_provider` field, a `tiered_pricing` list for some models). The rest of our codebase shouldn't have to learn those quirks. So this change adds a **loader**: a small module whose only job is to read that file once at startup and produce instances of our internal `Pricing` dataclass (per-million-USD rates, our own provider names). After this change, no other module has any reason to import `json` for pricing — they all talk to `Pricing` objects.
+
+This change does **conversion only**. Storing the converted records into the `pricing_snapshot` SQLite table (the "upsert" — short for "update or insert") is the next change.
+
+#### Concepts that show up in this change
+
+- **`importlib.resources.files(...)`** — Python's standard way to read a file that lives *inside* an installed package. We can't just write `open("src/llm_usage/core/pricing_data/prices.json")` because once the project is installed via `pip install`, there is no `src/`; the package lives somewhere inside `site-packages/`. `files("llm_usage.core.pricing_data").joinpath("prices.json").read_text()` works regardless of whether you're running from source, from a wheel, or from a zipapp.
+- **Frozen dataclass** — `@dataclass(frozen=True)` makes instances immutable (assigning to a field raises). `Pricing` is frozen so a record loaded once at startup can't be silently mutated by some calling code, which would make pricing-drift bugs much harder to track down.
+- **MCP server** — "Model Context Protocol" server. Think of it as a small JSON-RPC server that exposes named tools and resources to a coding agent (Claude Code, Cursor, etc.). Our MCP layer (not built yet) will expose tools like `record_usage` and `query_spend`. Today's change is in the **core layer**, two layers below MCP — the loader will eventually be called by MCP setup code on first run.
+- **`pytest.approx(x)`** — a comparison helper that says "approximately equal, within floating-point rounding tolerance." Needed because `0.00000005 * 1_000_000` in IEEE-754 floats produces `0.04999999999999999`, not exactly `0.05`. Money math eventually goes through integer nano-USD (in `CostCalculator`), but the per-million rates stored on `Pricing` stay as floats, so test assertions on the stored rate need `approx`.
+
+#### What landed
+- **`src/llm_usage/core/pricing_loader.py`** — a new module with two functions you'd actually call:
+  - `parse_litellm_entry(model_key, entry, *, fetched_at=None) -> Pricing | None` — converts **one** dict entry (one model) from the JSON. Returns `None` when the entry is for a provider outside our v1 set (e.g., AWS Bedrock) or has no usable rates at all.
+  - `load_vendored_pricing(*, fetched_at=None) -> list[Pricing]` — reads the bundled `prices.json` end to end and returns a list, one record per `(provider, model)`.
+- **`src/llm_usage/core/__init__.py`** — re-exports both functions so callers can write `from llm_usage.core import load_vendored_pricing` instead of digging into the submodule path.
+- **`tests/test_pricing_loader.py`** — 25 new tests. Most use small hand-built dicts to pin one rule per test (e.g., "tiered → first tier wins"); a handful run on the **real** vendored file to catch corruption or LiteLLM shape drift. Total project test count is now **72 passing** (47 prior + 25 new).
+
+#### The conversion rules, with the reasoning behind each
+
+1. **Provider rename**. LiteLLM uses `dashscope` as the provider key — that's the **API endpoint** name (Alibaba Cloud's "DashScope" gateway). Users think in terms of the **model family** ("Qwen"), so we rename `dashscope → qwen` at our boundary. Anthropic / OpenAI / DeepSeek keep their names (they're already model-family-shaped). Everything else (e.g., `bedrock`, `vertex_ai`) returns `None` from the parser; that keeps the loader **inert** — if LiteLLM adds 50 new providers next month, we ignore them silently rather than poisoning our `pricing_snapshot` table with rows we don't know how to capture usage for.
+
+2. **Model name normalization**. Some keys in the JSON are namespaced (`"dashscope/qwen-coder"`), some are bare (`"claude-haiku-4-5"`). We strip `"{litellm_provider}/"` when present so the model column is always clean. A test pins that a `/` *inside* a fine-tune model id (`ft:gpt-4o:my-org/internal`) is preserved — only the documented prefix is touched.
+
+3. **Units: per-token → per-million USD**. The JSON has values like `"input_cost_per_token": 0.000003` (i.e. $3 / 1,000,000 tokens). Our internal `Pricing` stores `input_per_million_usd: 3.0`. The conversion is a single multiplication by `1_000_000`. We store per-million because that's the unit every pricing page on the internet uses — it's easier to eyeball "$3/M" than "$0.000003/token".
+
+4. **Cache fields**:
+   - `cache_creation_input_token_cost` (in JSON) → `cache_write_per_million_usd` (in `Pricing`). "Cache write" = the first time you send a prompt with a cache marker; the provider stores it.
+   - `cache_read_input_token_cost` (in JSON) → `cache_read_per_million_usd`. "Cache read" = subsequent calls hit the cache; cheaper.
+   - Either may be **missing** in the JSON. Anthropic provides both; OpenAI and DeepSeek only provide `cache_read_input_token_cost` because they roll the write cost into the regular input rate. Missing → `None` on `Pricing`. The downstream `CostCalculator` already raises if a usage row reports cache tokens against a `None` rate, so "absent → None" is the correct, safe default.
+
+5. **Tiered pricing fallback**. A handful of Qwen models (e.g., `dashscope/qwen-flash`) carry **no** flat rates at the top level — only a `tiered_pricing` list, where each tier looks like `{"range": [0, 256000], "input_cost_per_token": 5e-8, "output_cost_per_token": 4e-7}`. v1 isn't doing tier-aware billing yet, so the loader takes the **first tier** as the base rate. If a future LiteLLM entry happens to carry both flat and tiered rates, flat wins (defensive — no real example of this today).
+
+6. **`fetched_at` (millisecond epoch)**. The caller supplies it; if omitted, we default to `time.time() * 1000` cast to `int`. Tests always pass an explicit value (e.g., `fetched_at=1`) so they don't depend on the wall clock.
+
+#### A duplicate-key surprise that the loader has to resolve
+While checking the real file, I found that LiteLLM ships **two entries for the same model** in two cases:
+- `"deepseek-chat"` and `"deepseek/deepseek-chat"`
+- `"deepseek-reasoner"` and `"deepseek/deepseek-reasoner"`
+
+After our model-name normalization (strip the `deepseek/` prefix), they collide on `(provider="deepseek", model="deepseek-chat")`. Looking at the raw entries, the bare form has only `cache_read_input_token_cost`, while the namespaced form adds `cache_creation_input_token_cost`. So the namespaced form is strictly the **richer** record.
+
+The dedupe rule the loader uses: keep one record per `(provider, model)`, breaking ties by **count of populated cache rates** — richer wins. This deterministically picks the namespaced entry without me having to hard-code "prefer prefixed keys", which would be brittle the next time LiteLLM reshuffles things. A dedicated test asserts the kept `deepseek-chat` has both `cache_write_per_million_usd` and `cache_read_per_million_usd` populated; another test asserts the returned list has no duplicate `(provider, model)` pairs at all.
+
+#### A floating-point gotcha that surfaced in the tests
+The first test run failed on:
+```python
+assert p.input_per_million_usd == 0.05    # FAILED: actual was 0.04999999999999999
+```
+The cause: `5e-8 * 1_000_000` is not exactly `0.05` in IEEE-754 double-precision floats. Most rates round-trip cleanly because they're nice powers of 10 (`3e-6 * 1e6` is exactly `3.0`); the tiered Qwen rates are the exception. Fix: use `pytest.approx(0.05)` for those assertions. This isn't a real bug in the loader — by the time a number reaches the database, it goes through `CostCalculator` which converts to integer nano-USD and rounds with banker's rounding, so accumulated drift is impossible at the storage layer. The float-equality check was just a too-strict test assertion.
+
+#### Why I'm not also doing the DB upsert in this change
+"Upsert" = `INSERT ... ON CONFLICT (provider, model) DO UPDATE SET ...`. Our `pricing_snapshot` table's primary key is `(provider, model)`, so the SQL is straightforward. But the wider design has a few open questions worth deciding deliberately, not in passing:
+- When `prices.json` is refreshed and a model **disappears** from it (e.g., Anthropic deprecates an old Claude), do we delete the row from `pricing_snapshot`, or leave it so historical `usage_events` referencing that model can still be priced?
+- Do we bump `fetched_at` on every load even when the rates didn't change? (Probably yes, because `fetched_at` is a "last verified" timestamp, not "last changed".)
+- Should the upsert run automatically on first import of the package, or only when an explicit CLI command is run?
+
+Each of those needs a small test. So the upsert lives in the next change.
+
+#### Verification (the toolchain run after every change)
+```bash
+uv run ruff check .              # All checks passed!         (lint)
+uv run ruff format --check .     # 20 files already formatted (formatting)
+uv run mypy                      # Success: no issues found in 16 source files (strict types)
+uv run pytest -q                 # 72 passed                  (tests)
+```
+
+#### Open issues / follow-ups
+- **DB upsert**: write `materialize_pricing_snapshot(session)` that calls `load_vendored_pricing()` and upserts on `(provider, model)`. Decide the deletion-on-disappear policy first.
+- **CLI**: a `llm-usage-mcp pricing refresh` subcommand so end-users can re-materialize after `pip install -U` pulls a newer `prices.json`.
+- **MCP `record_usage` tool**: now unblocked end-to-end — accept token counts → `get_pricing(session, provider, model)` → `CostCalculator.cost_nano_usd(...)` → insert a `UsageEvent`.
+
 ---
 
 ## 中文版本
@@ -793,3 +868,78 @@ uv run pytest -q          # 47 passed
 #### 待办 / 后续
 - Pricing loader：解析 `prices.json`、把 per-token 换成 per-million-USD、处理阶梯定价取第一档、upsert 到 `pricing_snapshot`。如果某条目没有 `cache_creation_input_token_cost`，`cache_write_per_million_usd` 设成 `None`（OpenAI / DeepSeek 把 cache write 成本吃了）。
 - GitHub Action：每周自动重跑 `jq` 过滤，把 diff 提一个 PR。
+
+### 2026-05-11 — Pricing loader（LiteLLM JSON → 内部 `Pricing`）
+
+#### 这次到底改了什么，一段话讲清楚
+我们 **vendor**（"vendor" 在软件工程里就是"把别人项目的文件直接拷一份进自己仓库"的意思）了 LiteLLM 项目的 `model_prices...json` 文件——这个文件里列了几乎所有 LLM 的定价。LiteLLM 用的是它自己的字段名和单位约定（按 token 计的 USD、字段叫 `litellm_provider`、个别模型用 `tiered_pricing` 列表）。我们其它代码不应该需要去理解这些怪癖。所以这次新增了一个 **loader**：一个小模块，唯一职责就是在程序启动时读一次这个 JSON 文件，然后产出一批我们内部的 `Pricing` dataclass 实例（按每百万 token USD 计、用我们自己的 provider 命名）。这个改动落地之后，仓库里其它任何模块都没理由再 `import json` 来读定价——它们一律只跟 `Pricing` 对象打交道。
+
+这次只做**转换**。把转换出来的记录写进 `pricing_snapshot` SQLite 表（这一步叫 **upsert**，是 "update or insert" 的简写），是下一次改动的事。
+
+#### 这次出现的几个概念
+
+- **`importlib.resources.files(...)`** —— Python 标准库里读"装在某个包里的文件"的标准做法。不能简单写 `open("src/llm_usage/core/pricing_data/prices.json")`，因为项目一旦被 `pip install` 安装到机器上，就不存在 `src/` 目录了，包文件躺在 `site-packages/` 里某个位置。`files("llm_usage.core.pricing_data").joinpath("prices.json").read_text()` 这种写法在源码运行、wheel 安装、zipapp 打包等所有场景下都能稳定找到文件。
+- **冻结 dataclass（frozen dataclass）** —— `@dataclass(frozen=True)` 让实例**不可变**（再赋值会抛异常）。`Pricing` 之所以冻结，是为了保证启动时加载进来的记录不会被任何调用方悄悄改掉——否则一旦出现"定价漂移"的 bug，几乎查不出来源。
+- **MCP server** —— "Model Context Protocol" 服务器。可以理解成一个小型 JSON-RPC 服务，把命名好的 tools 和 resources 暴露给编码 agent（Claude Code、Cursor 等）。我们项目的 MCP 层（还没建）会暴露 `record_usage`、`query_spend` 这些 tool。这次的改动落在 **core 层**，比 MCP 层低两层；将来 MCP 启动代码会调用这个 loader。
+- **`pytest.approx(x)`** —— 一个比较小帮手，意思是"在浮点误差范围内近似相等"。需要它是因为 `0.00000005 * 1_000_000` 在 IEEE-754 双精度浮点里算出来是 `0.04999999999999999`，不是恰好的 `0.05`。账务最终会通过 `CostCalculator` 转成整数 nano-USD，但 `Pricing` 上存的"每百万 USD"费率仍然是 float，所以测试断言读到的费率时需要 `approx`。
+
+#### 这次落地了什么
+- **`src/llm_usage/core/pricing_loader.py`** —— 新模块，对外两个函数：
+  - `parse_litellm_entry(model_key, entry, *, fetched_at=None) -> Pricing | None` —— 把 JSON 里**一个**模型条目转换出来。条目落在 v1 不支持的 provider（比如 AWS Bedrock）或者完全没有可用费率时，返回 `None`。
+  - `load_vendored_pricing(*, fetched_at=None) -> list[Pricing]` —— 一次性读完整 `prices.json`，按 `(provider, model)` 去重后返回列表。
+- **`src/llm_usage/core/__init__.py`** —— 把这两个函数也 re-export 出去，调用方可以直接 `from llm_usage.core import load_vendored_pricing`，不用一层层翻子模块。
+- **`tests/test_pricing_loader.py`** —— 25 个新测试。多数用手写的小字典锁住一条规则（例如"阶梯定价取第一档"），少数跑在**真实**的内置 JSON 上，用来抓文件损坏或者 LiteLLM 字段结构漂移。仓库测试总数从 47 涨到 **72，全部通过**。
+
+#### 转换规则一条一条说，连同每条背后的取舍
+
+1. **Provider 改名**。LiteLLM 用 `dashscope` 做 provider key——这是**API 端点**名（阿里云的 "DashScope" 网关）。但用户脑子里想的是**模型家族**（"Qwen"），所以在我们这一层改名 `dashscope → qwen`。Anthropic / OpenAI / DeepSeek 名字保持不变（它们本来就长得像家族名）。其它一切（如 `bedrock`、`vertex_ai`）由 parser 直接返回 `None`；这样 loader 是**惰性的**——下个月 LiteLLM 再加 50 个新 provider，我们会静默忽略，而不是把不会捕获的行污染进 `pricing_snapshot`。
+
+2. **模型名规范化**。JSON 里有的 key 带命名空间前缀（`"dashscope/qwen-coder"`），有的是裸的（`"claude-haiku-4-5"`）。当 key 以 `"{litellm_provider}/"` 开头时，我们把这个前缀去掉，让 model 列永远干净。专门有一条测试盯住一种边界情况：fine-tune 模型 id 里**自带**斜杠（如 `ft:gpt-4o:my-org/internal`）必须**保留**——只有文档列出来的前缀才会被剥掉。
+
+3. **单位：每 token → 每百万 USD**。JSON 里写的是 `"input_cost_per_token": 0.000003`（也就是 1,000,000 个 token 收 $3）。我们内部 `Pricing` 存 `input_per_million_usd: 3.0`。换算就是乘 `1_000_000`。之所以选每百万 USD，是因为外面所有定价页面都用这个单位——人眼看 "$3/M" 比看 "$0.000003/token" 容易得多。
+
+4. **缓存（cache）字段**：
+   - JSON 中的 `cache_creation_input_token_cost` → `Pricing` 上的 `cache_write_per_million_usd`。"cache write" = 第一次发送带缓存标记的 prompt 时，provider 把它写入缓存。
+   - JSON 中的 `cache_read_input_token_cost` → `cache_read_per_million_usd`。"cache read" = 后续调用命中缓存时按更便宜的费率结算。
+   - 这两个字段在 JSON 里都**有可能缺失**。Anthropic 两个都给；OpenAI 和 DeepSeek 只给 `cache_read_input_token_cost`，因为它们把"写"那部分成本卷进了普通 input 费率里。缺失则在 `Pricing` 上设成 `None`。下游 `CostCalculator` 已经做过校验：如果某条 usage 行报告了 cache token，但费率是 `None`，会主动抛错。所以"缺失即 `None`"是正确且安全的默认。
+
+5. **阶梯定价 fallback**。少数 Qwen 模型（如 `dashscope/qwen-flash`）在顶层**完全没有**平直费率，只有一个 `tiered_pricing` 列表，每档形如 `{"range": [0, 256000], "input_cost_per_token": 5e-8, "output_cost_per_token": 4e-7}`。v1 还没做按档计费的能力，所以 loader 直接取**第一档**当基准。如果将来某条 LiteLLM 记录同时带平直和阶梯，平直胜出（防御性写法，今天还没有真实例子）。
+
+6. **`fetched_at`（毫秒时间戳）**。由调用方传入；省略时默认用 `int(time.time() * 1000)`。测试一律传显式值（如 `fetched_at=1`），免得依赖墙上时钟。
+
+#### 一个让 loader 必须正面回答的"重复 key"惊喜
+扫一遍真实文件时发现 LiteLLM **同一个模型给了两条记录**有两组：
+- `"deepseek-chat"` 和 `"deepseek/deepseek-chat"`
+- `"deepseek-reasoner"` 和 `"deepseek/deepseek-reasoner"`
+
+经过我们的模型名规范化（去掉 `deepseek/` 前缀），它们撞上同一个 `(provider="deepseek", model="deepseek-chat")`。看原始字段：裸 key 那条只有 `cache_read_input_token_cost`，带前缀那条还多了 `cache_creation_input_token_cost`。也就是说带前缀那条字段更**齐**。
+
+loader 用的去重规则：每个 `(provider, model)` 只留一条，平局时按**填充的缓存费率个数**比，谁齐谁赢。这样做的好处是规则确定（deterministic），不需要硬编码"前缀版优先"——LiteLLM 哪天再调整结构，这条规则也不至于立刻过时。专门有一条测试盯住：被保留的 `deepseek-chat` 必须同时有 `cache_write_per_million_usd` 和 `cache_read_per_million_usd`；另一条测试盯住返回列表里没有任何 `(provider, model)` 重复对。
+
+#### 测试里冒出来的浮点小坑
+第一次跑测试就挂在这一行：
+```python
+assert p.input_per_million_usd == 0.05    # 实际是 0.04999999999999999
+```
+原因：`5e-8 * 1_000_000` 在 IEEE-754 双精度下算出来不是恰好 `0.05`。大多数费率能精确还原是因为它们是好看的 10 的幂（`3e-6 * 1e6` 恰好等于 `3.0`）；阶梯定价里的 Qwen 费率是个例外。修法：相关断言改用 `pytest.approx(0.05)`。这不是 loader 真有 bug——账务最终会经过 `CostCalculator` 落到整数 nano-USD，并采用银行家舍入，所以累积漂移在存储层不可能发生。这次只是测试断言写得**过严**了。
+
+#### 这次为什么没有顺手把 DB upsert 也做了
+"Upsert" = `INSERT ... ON CONFLICT (provider, model) DO UPDATE SET ...`。`pricing_snapshot` 表的主键就是 `(provider, model)`，SQL 本身不复杂。但有几个设计问题值得**单独**想清楚，而不是顺手做掉：
+- 当 `prices.json` 刷新后，某个模型从 JSON 里**消失**了（比如 Anthropic 把某个老 Claude 下线），我们应该把 `pricing_snapshot` 里那行删掉，还是留着，让历史 `usage_events` 里引用这个模型的行还能定到价？
+- 即便费率没变，每次加载是不是都要更新 `fetched_at`？（大概率是要——`fetched_at` 是"上次校核时间"，不是"上次变更时间"。）
+- upsert 应该在包首次 import 时自动跑，还是只在显式 CLI 命令下跑？
+
+每个都需要配一两个测试。所以 upsert 留到下一次改动。
+
+#### 验证（每次改完都要跑的工具链）
+```bash
+uv run ruff check .              # All checks passed!         （lint）
+uv run ruff format --check .     # 20 files already formatted （格式化）
+uv run mypy                      # Success: no issues found in 16 source files （严格类型）
+uv run pytest -q                 # 72 passed                  （测试）
+```
+
+#### 待办 / 后续
+- **DB upsert**：写一个 `materialize_pricing_snapshot(session)`，调用 `load_vendored_pricing()` 然后按 `(provider, model)` upsert。先把"模型消失要不要删行"的策略定下来。
+- **CLI**：加一个 `llm-usage-mcp pricing refresh` 子命令，让终端用户在 `pip install -U` 拉到新 `prices.json` 后能手动重新落库。
+- **MCP `record_usage` tool**：到此就端到端通了 —— 接收 token 数 → `get_pricing(session, provider, model)` → `CostCalculator.cost_nano_usd(...)` → 插入 `UsageEvent`。

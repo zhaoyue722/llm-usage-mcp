@@ -16,6 +16,10 @@ from llm_usage.core.pricing import (
     Pricing,
     get_pricing,
 )
+from llm_usage.core.pricing_loader import (
+    load_vendored_pricing,
+    parse_litellm_entry,
+)
 
 __all__ = [
     "CURRENT_SCHEMA_VERSION",
@@ -31,5 +35,7 @@ __all__ = [
     "get_pricing",
     "get_session",
     "get_session_factory",
+    "load_vendored_pricing",
+    "parse_litellm_entry",
     "resolve_db_url",
 ]
