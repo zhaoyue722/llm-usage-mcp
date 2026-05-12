@@ -432,6 +432,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "mcp", extra = ["cli"] },
+    { name = "pydantic" },
     { name = "sqlalchemy" },
 ]
 
@@ -447,6 +448,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.18.4" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.27.0" },
+    { name = "pydantic", specifier = ">=2" },
     { name = "sqlalchemy", specifier = ">=2.0" },
 ]
 
