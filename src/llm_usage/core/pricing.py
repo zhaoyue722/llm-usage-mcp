@@ -27,6 +27,28 @@ from llm_usage.core.db.models import PricingSnapshot
 # nano-USD = tokens * rate * (1e9 / 1e6) = tokens * rate * 1_000.
 _NANO_PER_MILLION_USD = 1_000
 
+_NANO_PER_USD = 1_000_000_000
+
+
+def usd_to_nano(usd: float) -> int:
+    """Convert float USD to integer nano-USD with banker's rounding.
+
+    The MCP-tool boundary accepts float USD (per spec) but storage is
+    integer nano-USD. Use this when crossing in from the float side
+    (e.g., a future budget threshold the user types in dollars).
+    """
+    return round(usd * _NANO_PER_USD)
+
+
+def nano_to_usd(nano: int) -> float:
+    """Convert integer nano-USD to float USD.
+
+    Pair with `usd_to_nano` at the MCP-tool boundary. The spec mandates
+    that all dollar amounts surfaced to agents are float USD — this is
+    the single conversion point so callers never roll their own `/1e9`.
+    """
+    return nano / _NANO_PER_USD
+
 
 @dataclass(frozen=True)
 class Pricing:
