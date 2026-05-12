@@ -15,7 +15,9 @@ from llm_usage.core.pricing import (
     CostCalculator,
     Pricing,
     get_pricing,
+    nano_to_usd,
     upsert_pricing,
+    usd_to_nano,
 )
 from llm_usage.core.pricing_loader import (
     load_vendored_pricing,
@@ -37,7 +39,9 @@ __all__ = [
     "get_session",
     "get_session_factory",
     "load_vendored_pricing",
+    "nano_to_usd",
     "parse_litellm_entry",
     "resolve_db_url",
     "upsert_pricing",
+    "usd_to_nano",
 ]

@@ -21,6 +21,8 @@ from llm_usage.core import (
     Pricing,
     PricingSnapshot,
     get_pricing,
+    nano_to_usd,
+    usd_to_nano,
 )
 
 # Anthropic Claude Sonnet 4.6: $3/$15 input/output, $3.75/$0.30 cache write/read.
@@ -40,6 +42,26 @@ NO_CACHE_PRICING = Pricing(
     model="qwen-turbo-legacy",
     input_per_million_usd=0.30,
     output_per_million_usd=0.60,
+)
+
+# OpenAI gpt-4o: $2.50/$10.00 input/output, $1.25/M cache-read (no separate cache-write).
+OPENAI_PRICING = Pricing(
+    provider="openai",
+    model="gpt-4o",
+    input_per_million_usd=2.50,
+    output_per_million_usd=10.00,
+    cache_write_per_million_usd=None,
+    cache_read_per_million_usd=1.25,
+)
+
+# DeepSeek deepseek-chat: $0.28/$0.42 input/output, $0.028/M cache-read.
+DEEPSEEK_PRICING = Pricing(
+    provider="deepseek",
+    model="deepseek-chat",
+    input_per_million_usd=0.28,
+    output_per_million_usd=0.42,
+    cache_write_per_million_usd=None,
+    cache_read_per_million_usd=0.028,
 )
 
 
@@ -155,6 +177,30 @@ def test_cost_zero_tokens_is_zero() -> None:
     assert calc.cost_nano_usd(input_tokens=0, output_tokens=0) == 0
 
 
+def test_cost_openai_input_output_only() -> None:
+    """Smoke test on OpenAI rates: 100K input + 50K output, no cache.
+
+    100_000 * $2.50/M = $0.25  = 250_000_000 nano-USD
+     50_000 * $10.00/M = $0.50 = 500_000_000 nano-USD
+    Total = 750_000_000 nano-USD.
+    """
+    calc = CostCalculator(OPENAI_PRICING)
+    cost = calc.cost_nano_usd(input_tokens=100_000, output_tokens=50_000)
+    assert cost == 750_000_000
+
+
+def test_cost_deepseek_input_output_only() -> None:
+    """Smoke test on DeepSeek rates: 1M input + 500K output, no cache.
+
+    1_000_000 * $0.28/M = $0.28 = 280_000_000 nano-USD
+      500_000 * $0.42/M = $0.21 = 210_000_000 nano-USD
+    Total = 490_000_000 nano-USD.
+    """
+    calc = CostCalculator(DEEPSEEK_PRICING)
+    cost = calc.cost_nano_usd(input_tokens=1_000_000, output_tokens=500_000)
+    assert cost == 490_000_000
+
+
 def test_pricing_property_exposes_underlying_pricing() -> None:
     calc = CostCalculator(ANTHROPIC_PRICING)
     assert calc.pricing is ANTHROPIC_PRICING
@@ -255,3 +301,59 @@ def test_calculator_end_to_end_via_get_pricing(engine: Engine) -> None:
         calc = CostCalculator(pricing)
         cost = calc.cost_nano_usd(input_tokens=1_000_000, output_tokens=0)
         assert cost == 3_000_000_000
+
+
+# --- usd_to_nano / nano_to_usd boundary helpers ---------------------------
+
+
+def test_usd_to_nano_zero() -> None:
+    assert usd_to_nano(0.0) == 0
+
+
+def test_usd_to_nano_one_dollar() -> None:
+    assert usd_to_nano(1.0) == 1_000_000_000
+
+
+def test_usd_to_nano_one_cache_read_token() -> None:
+    """A single Anthropic cache-read token at $0.30/M = $3e-7 = 300 nano-USD.
+
+    Pins the sub-nano-relevant boundary: the smallest value the storage
+    layer must represent without rounding to zero.
+    """
+    assert usd_to_nano(3e-7) == 300
+
+
+def test_usd_to_nano_rounds_to_nearest_nano() -> None:
+    """0.5 nano rounds to 0 (banker's rounding to even)."""
+    assert usd_to_nano(0.5e-9) == 0
+    assert usd_to_nano(1.5e-9) == 2  # banker's rounding: 1.5 -> 2 (toward even)
+
+
+def test_nano_to_usd_zero() -> None:
+    assert nano_to_usd(0) == 0.0
+
+
+def test_nano_to_usd_one_dollar() -> None:
+    assert nano_to_usd(1_000_000_000) == 1.0
+
+
+def test_nano_to_usd_returns_float() -> None:
+    """The MCP boundary returns float USD per spec — verify the type."""
+    assert isinstance(nano_to_usd(300), float)
+
+
+def test_round_trip_typical_call_cost() -> None:
+    """The $0.6555 worked example from the pricing entry: 655_500_000 nano-USD.
+
+    Round-tripping through usd_to_nano(nano_to_usd(n)) must be exact for
+    any value the calculator can produce — there should be no drift at
+    the API boundary.
+    """
+    nano = 655_500_000
+    assert usd_to_nano(nano_to_usd(nano)) == nano
+
+
+def test_round_trip_large_cost() -> None:
+    """One million dollars in nano-USD round-trips without loss."""
+    nano = 1_000_000 * 1_000_000_000  # $1M
+    assert usd_to_nano(nano_to_usd(nano)) == nano
