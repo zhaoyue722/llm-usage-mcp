@@ -95,3 +95,24 @@ def test_bootstrap_is_safe_to_call_twice(db_url: str) -> None:
         after = session.scalar(select(func.count()).select_from(PricingSnapshot))
 
     assert after == before
+
+
+def test_bootstrap_creates_missing_parent_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: fresh install where the DB's parent dir doesn't exist.
+
+    Mirrors the production failure mode where `~/.llm-usage/` is not
+    yet created on first server boot. Alembic's own engine factory
+    doesn't auto-create directories, so without our explicit
+    `_ensure_sqlite_parent_dir` step, SQLite raises `OperationalError:
+    unable to open database file` before any migration script runs.
+    """
+    nested = tmp_path / "deeper" / "subdir"
+    db = nested / "usage.db"
+    monkeypatch.setenv("LLM_USAGE_DB_URL", f"sqlite:///{db}")
+
+    assert not nested.exists()
+    bootstrap()
+    assert nested.is_dir()
+    assert db.is_file()

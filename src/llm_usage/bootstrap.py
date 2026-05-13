@@ -26,6 +26,7 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import func, select
+from sqlalchemy.engine.url import make_url
 
 from llm_usage.config import get_settings
 from llm_usage.core.db.models import PricingSnapshot
@@ -61,8 +62,30 @@ def migrate_to_head() -> None:
     """Run `alembic upgrade head` against the configured DB. Idempotent."""
     root = _find_alembic_root()
     cfg = Config(str(root / "alembic.ini"))
-    cfg.set_main_option("sqlalchemy.url", get_settings().db_url)
+    db_url = get_settings().db_url
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    _ensure_sqlite_parent_dir(db_url)
     command.upgrade(cfg, "head")
+
+
+def _ensure_sqlite_parent_dir(url: str) -> None:
+    """Create the parent dir for a file-backed SQLite DB if missing.
+
+    Alembic's `engine_from_config()` (used inside `alembic/env.py`)
+    doesn't auto-create directories; on a fresh install where
+    `~/.llm-usage/` doesn't yet exist, SQLite raises
+    `OperationalError: unable to open database file` before any
+    migration runs. The runtime engine factory in
+    `core/db/session.py:create_engine()` already does this same step
+    for non-Alembic paths; we replicate it here so the two paths agree.
+    """
+    parsed = make_url(url)
+    if not parsed.drivername.startswith("sqlite"):
+        return
+    db_path = parsed.database
+    if not db_path or db_path == ":memory:":
+        return
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
 
 def materialize_pricing_if_empty() -> int:
