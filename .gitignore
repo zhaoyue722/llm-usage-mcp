@@ -1,6 +1,9 @@
 # Local-only progress log (kept on disk, never pushed)
 progress.md
 
+# Local-only detailed action plan (kept on disk, never pushed)
+docs/detailed_plan.md
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
