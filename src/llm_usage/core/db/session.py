@@ -1,14 +1,14 @@
 """Engine factory, session factory, and SQLite tuning.
 
-The DB URL is resolved from `LLM_USAGE_DB_URL`, defaulting to the spec's
-`~/.llm-usage/usage.db`. File-backed SQLite engines get WAL mode and
-`synchronous=NORMAL` applied on every connect — the standard pairing that
-allows concurrent reads during writes without an fsync on every commit.
+The DB URL is resolved via `llm_usage.config.get_settings().db_url`, which
+honors `LLM_USAGE_DB_URL` and defaults to the spec's `~/.llm-usage/usage.db`.
+File-backed SQLite engines get WAL mode and `synchronous=NORMAL` applied on
+every connect — the standard pairing that allows concurrent reads during
+writes without an fsync on every commit.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any, Final
 
@@ -17,6 +17,8 @@ from sqlalchemy import create_engine as _sa_create_engine
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
+from llm_usage.config import get_settings
+
 DEFAULT_DB_PATH: Final[Path] = Path.home() / ".llm-usage" / "usage.db"
 
 _engine: Engine | None = None
@@ -24,15 +26,14 @@ _session_factory: sessionmaker[Session] | None = None
 
 
 def resolve_db_url() -> str:
-    """Return the DB URL, reading `LLM_USAGE_DB_URL` first.
+    """Return the DB URL from process-wide `Settings`.
 
     Used by both the application engine factory and `alembic/env.py` so app
-    code and migrations always talk to the same database.
+    code and migrations always talk to the same database. Tests that
+    mutate `LLM_USAGE_DB_URL` mid-run must call
+    `llm_usage.config.get_settings.cache_clear()` to pick up the change.
     """
-    env_url = os.environ.get("LLM_USAGE_DB_URL")
-    if env_url:
-        return env_url
-    return f"sqlite:///{DEFAULT_DB_PATH}"
+    return get_settings().db_url
 
 
 def _is_file_sqlite(url: str) -> bool:
