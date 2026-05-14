@@ -149,8 +149,12 @@ def test_two_resources_registered() -> None:
 # --- stub behavior ---------------------------------------------------------
 
 
-def test_each_tool_body_raises_not_implemented() -> None:
-    """Stubs raise; callers know nothing is wired up yet."""
+def test_unwired_tool_bodies_still_raise_not_implemented() -> None:
+    """The 5 not-yet-wired tools raise.
+
+    `list_providers`, `get_pricing` and the 2 resources are tested in
+    `test_read_path_tools.py` against real seeded DBs.
+    """
 
     async def run_all() -> None:
         with pytest.raises(NotImplementedError):
@@ -164,18 +168,6 @@ def test_each_tool_body_raises_not_implemented() -> None:
         with pytest.raises(NotImplementedError):
             await server_module.recommend_provider(task_description="x")
         with pytest.raises(NotImplementedError):
-            await server_module.get_pricing()
-        with pytest.raises(NotImplementedError):
             await server_module.usage_summary()
-        with pytest.raises(NotImplementedError):
-            await server_module.list_providers()
 
     asyncio.run(run_all())
-
-
-def test_resource_stubs_raise_not_implemented() -> None:
-    """Resources are sync; calling them directly raises NotImplementedError."""
-    with pytest.raises(NotImplementedError):
-        server_module.recent_events()
-    with pytest.raises(NotImplementedError):
-        server_module.pricing_table()
