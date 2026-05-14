@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -163,6 +164,18 @@ def get_pricing(session: Session, provider: str, model: str) -> Pricing | None:
     if row is None:
         return None
     return Pricing.from_orm(row)
+
+
+def all_pricing(session: Session) -> list[Pricing]:
+    """Return every `pricing_snapshot` row as a `Pricing`, sorted.
+
+    The "get all" sibling of `get_pricing`. Order is stable
+    (provider, model) so cost-projection callers (`compare_providers`,
+    later `recommend_provider`) get deterministic tie-breaking when two
+    models project to the same cost.
+    """
+    stmt = select(PricingSnapshot).order_by(PricingSnapshot.provider, PricingSnapshot.model)
+    return [Pricing.from_orm(row) for row in session.scalars(stmt).all()]
 
 
 def upsert_pricing(session: Session, pricings: Iterable[Pricing]) -> int:
