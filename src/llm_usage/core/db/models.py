@@ -94,6 +94,24 @@ class PricingSnapshot(Base):
     fetched_at: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class QualitySnapshot(Base):
+    """Materialized quality score per (provider, model) at fetch time.
+
+    Sibling of `pricing_snapshot`, kept deliberately separate: quality
+    and pricing have different sources (a hand-authored vendored file
+    today, a public leaderboard importer later, vs. LiteLLM's pricing
+    JSON) and different refresh cadences. `quality_score` is a
+    normalized 0-100 float; higher is better.
+    """
+
+    __tablename__ = "quality_snapshot"
+
+    provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    model: Mapped[str] = mapped_column(Text, primary_key=True)
+    quality_score: Mapped[float] = mapped_column(Float, nullable=False)
+    fetched_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class SchemaVersion(Base):
     """Single-row table tracking the active schema version."""
 

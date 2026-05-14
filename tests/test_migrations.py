@@ -48,7 +48,12 @@ def test_upgrade_creates_spec_tables(upgraded_engine: Engine) -> None:
     inspector = inspect(upgraded_engine)
     tables = set(inspector.get_table_names())
     # alembic_version is Alembic's own; the rest must match the spec.
-    assert {"usage_events", "pricing_snapshot", "schema_version"} <= tables
+    assert {
+        "usage_events",
+        "pricing_snapshot",
+        "quality_snapshot",
+        "schema_version",
+    } <= tables
     assert "alembic_version" in tables
 
 
@@ -88,4 +93,5 @@ def test_downgrade_removes_spec_tables(db_path: Path, alembic_config: Config) ->
 
     assert "usage_events" not in tables
     assert "pricing_snapshot" not in tables
+    assert "quality_snapshot" not in tables
     assert "schema_version" not in tables
