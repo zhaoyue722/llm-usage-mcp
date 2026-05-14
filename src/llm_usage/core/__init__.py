@@ -23,6 +23,10 @@ from llm_usage.core.pricing_loader import (
     load_vendored_pricing,
     parse_litellm_entry,
 )
+from llm_usage.core.recording import (
+    RecordedEvent,
+    record_event,
+)
 
 __all__ = [
     "CURRENT_SCHEMA_VERSION",
@@ -31,6 +35,7 @@ __all__ = [
     "CostCalculator",
     "Pricing",
     "PricingSnapshot",
+    "RecordedEvent",
     "SchemaVersion",
     "UsageEvent",
     "create_engine",
@@ -41,6 +46,7 @@ __all__ = [
     "load_vendored_pricing",
     "nano_to_usd",
     "parse_litellm_entry",
+    "record_event",
     "resolve_db_url",
     "upsert_pricing",
     "usd_to_nano",

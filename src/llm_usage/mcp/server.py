@@ -10,13 +10,13 @@ output JSON schema is generated automatically.
 
 Status:
 
-- **Wired up** (read-only paths): `list_providers`, `get_pricing`,
-  `usage://pricing_table`, `usage://recent_events`. These query the
-  database that `bootstrap()` seeds on first run.
-- **Stubs** (still raise `NotImplementedError`): `record_usage`,
-  `query_spend`, `compare_providers`, `recommend_provider`,
-  `usage_summary`. Their schemas are locked so MCP clients see the
-  full surface; bodies land tool-by-tool in follow-up changes.
+- **Wired up**: `record_usage` (write path), `list_providers`,
+  `get_pricing`, `usage://pricing_table`, `usage://recent_events`.
+  These read/write the database that `bootstrap()` seeds on first run.
+- **Stubs** (still raise `NotImplementedError`): `query_spend`,
+  `compare_providers`, `recommend_provider`, `usage_summary`. Their
+  schemas are locked so MCP clients see the full surface; bodies land
+  tool-by-tool in follow-up changes.
 """
 
 from __future__ import annotations
@@ -46,6 +46,7 @@ from llm_usage.core.models import (
     UsageSummaryResult,
 )
 from llm_usage.core.pricing import nano_to_usd
+from llm_usage.core.recording import record_event
 
 server: FastMCP = FastMCP(name="llm-usage")
 
@@ -152,7 +153,29 @@ async def record_usage(
     `request_id` enables idempotent recording — replaying a log file
     won't double-count.
     """
-    raise NotImplementedError("record_usage stub")
+    with get_session() as session:
+        recorded = record_event(
+            session,
+            provider=provider,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_write_tokens=cache_write_tokens,
+            cache_read_tokens=cache_read_tokens,
+            duration_ms=duration_ms,
+            success=success,
+            error_type=error_type,
+            request_id=request_id,
+            project=project,
+            tags=tags,
+            metadata=metadata,
+        )
+        session.commit()
+    return RecordUsageResult(
+        id=recorded.id,
+        cost_usd=nano_to_usd(recorded.cost_nano_usd),
+        warning=recorded.warning,
+    )
 
 
 @server.tool()
