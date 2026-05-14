@@ -11,12 +11,13 @@ output JSON schema is generated automatically.
 Status:
 
 - **Wired up**: `record_usage` (write path), `list_providers`,
-  `get_pricing`, `usage://pricing_table`, `usage://recent_events`.
-  These read/write the database that `bootstrap()` seeds on first run.
+  `get_pricing`, `compare_providers`, `usage://pricing_table`,
+  `usage://recent_events`. These read/write the database that
+  `bootstrap()` seeds on first run.
 - **Stubs** (still raise `NotImplementedError`): `query_spend`,
-  `compare_providers`, `recommend_provider`, `usage_summary`. Their
-  schemas are locked so MCP clients see the full surface; bodies land
-  tool-by-tool in follow-up changes.
+  `recommend_provider`, `usage_summary`. Their schemas are locked so
+  MCP clients see the full surface; bodies land tool-by-tool in
+  follow-up changes.
 """
 
 from __future__ import annotations
@@ -39,13 +40,14 @@ from llm_usage.core.models import (
     ProviderEntry,
     QualityPriority,
     QuerySpendResult,
+    RankedEntry,
     RecommendProviderResult,
     RecordUsageResult,
     SpendFilter,
     TaskType,
     UsageSummaryResult,
 )
-from llm_usage.core.pricing import nano_to_usd
+from llm_usage.core.pricing import CostCalculator, all_pricing, nano_to_usd
 from llm_usage.core.recording import record_event
 
 server: FastMCP = FastMCP(name="llm-usage")
@@ -65,6 +67,15 @@ _OPENAI_COMPATIBLE: Final[dict[str, bool]] = {
 # 50 is enough for "what just happened" without overwhelming a client that
 # has to render the JSON inline in a chat message.
 _RECENT_EVENTS_LIMIT: Final[int] = 50
+
+# Surfaced in `RankedEntry.notes` when `compare_providers` is called with
+# `include_cached_estimate=True`. v1 does not alter the cost figure: the
+# spec never defines what fraction of input to treat as cache hits, and
+# inventing one would mislead. The flag is accepted; this note is honest
+# about what it does (nothing, yet).
+_CACHED_ESTIMATE_NOTE: Final[str] = (
+    "include_cached_estimate accepted but not applied in v1; cost reflects input/output tokens only"
+)
 
 
 def _query_pricing(provider: str | None, model: str | None) -> list[PricingEntry]:
@@ -203,10 +214,59 @@ async def compare_providers(
 ) -> CompareProvidersResult:
     """Project the cost of a hypothetical workload across providers/models.
 
-    Returns models ranked by absolute cost, with `relative_cost_pct`
-    relative to the cheapest entry (cheapest = 100%).
+    Returns models ranked by absolute cost ascending, with
+    `relative_cost_pct` measured against the cheapest entry
+    (cheapest = 100%). `models`, if given, restricts the comparison to
+    those model names. `task_type` is accepted but does not affect the
+    ranking (cost is task-independent). `include_cached_estimate` is
+    accepted but does not alter the cost figure in v1 — see
+    `_CACHED_ESTIMATE_NOTE`.
     """
-    raise NotImplementedError("compare_providers stub")
+    with get_session() as session:
+        pricings = all_pricing(session)
+
+    if models is not None:
+        wanted = set(models)
+        pricings = [p for p in pricings if p.model in wanted]
+
+    note = _CACHED_ESTIMATE_NOTE if include_cached_estimate else None
+
+    # Project each model's cost for the hypothetical workload. `pricings`
+    # is already sorted by (provider, model), and Python's sort is stable,
+    # so sorting by cost keeps that order as the tie-breaker.
+    projected = [
+        (
+            pricing,
+            CostCalculator(pricing).cost_nano_usd(
+                input_tokens=expected_input_tokens,
+                output_tokens=expected_output_tokens,
+            ),
+        )
+        for pricing in pricings
+    ]
+    projected.sort(key=lambda pair: pair[1])
+
+    ranked: list[RankedEntry] = []
+    if projected:
+        cheapest_nano = projected[0][1]
+        for pricing, cost_nano in projected:
+            # cheapest_nano is 0 only when the whole workload projects to
+            # zero cost (e.g. both token counts are 0) — then every entry
+            # is 0 too, so 100% is the correct relative figure for all.
+            relative_pct = (
+                100.0 if cheapest_nano == 0 else round(cost_nano / cheapest_nano * 100, 2)
+            )
+            ranked.append(
+                RankedEntry(
+                    provider=pricing.provider,
+                    model=pricing.model,
+                    cost_usd=nano_to_usd(cost_nano),
+                    relative_cost_pct=relative_pct,
+                    notes=note,
+                )
+            )
+
+    return CompareProvidersResult(ranked=ranked)
 
 
 @server.tool()
