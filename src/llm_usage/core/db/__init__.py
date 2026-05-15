@@ -2,6 +2,7 @@ from llm_usage.core.db.models import (
     CURRENT_SCHEMA_VERSION,
     Base,
     PricingSnapshot,
+    QualitySnapshot,
     SchemaVersion,
     UsageEvent,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "DEFAULT_DB_PATH",
     "Base",
     "PricingSnapshot",
+    "QualitySnapshot",
     "SchemaVersion",
     "UsageEvent",
     "create_engine",

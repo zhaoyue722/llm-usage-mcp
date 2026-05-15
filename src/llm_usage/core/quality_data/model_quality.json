@@ -1,0 +1,36 @@
+{
+  "anthropic": {
+    "claude-opus-4-7": 96,
+    "claude-opus-4-6": 95,
+    "claude-opus-4-5": 94,
+    "claude-sonnet-4-6": 91,
+    "claude-sonnet-4-5": 89,
+    "claude-haiku-4-5": 82
+  },
+  "openai": {
+    "gpt-5.5-pro": 96,
+    "gpt-5.5": 94,
+    "gpt-5.4": 93,
+    "gpt-5.2": 91,
+    "gpt-5-mini": 83,
+    "gpt-5-nano": 75,
+    "o3": 93,
+    "o4-mini": 85
+  },
+  "deepseek": {
+    "deepseek-r1": 89,
+    "deepseek-reasoner": 89,
+    "deepseek-v3.2": 87,
+    "deepseek-v3": 85,
+    "deepseek-chat": 84,
+    "deepseek-coder": 83
+  },
+  "qwen": {
+    "qwen3-max": 89,
+    "qwen-max": 86,
+    "qwen3-coder-plus": 86,
+    "qwen-plus": 82,
+    "qwen-flash": 76,
+    "qwen-turbo": 73
+  }
+}
