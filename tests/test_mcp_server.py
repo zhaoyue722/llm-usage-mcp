@@ -1,8 +1,11 @@
-"""Tests for the MCP server stub — registration and schema shape.
+"""Tests for the MCP server surface — registration and schema shape.
 
-The tool/resource bodies are all `NotImplementedError`; what we care
-about at this stage is that the **surface** (discoverable by any MCP
-client) matches the spec:
+All 7 tools are wired now; tool-body behavior lives in the per-tool
+files (`test_recording.py`, `test_compare_providers.py`,
+`test_recommend_provider.py`, `test_query_spend.py`,
+`test_usage_summary.py`, `test_read_path_tools.py`). What we care about
+in this file is that the **surface** (discoverable by any MCP client)
+matches the spec:
 
 - the 7 tools from `docs/spec.md` are registered, with the right names;
 - each tool's input schema has exactly the parameter set the spec says;
@@ -14,7 +17,7 @@ Schema details (per-field types, enum values, frozen-ness) are covered
 in `test_mcp_types.py`; this file only checks that the wiring exists.
 
 Tests drive `await`-able SDK methods through `asyncio.run` to avoid a
-`pytest-asyncio` dependency just for the stub layer — there's no
+`pytest-asyncio` dependency just for the surface layer — there's no
 ongoing event-loop state to preserve, each call is independent.
 """
 
@@ -23,9 +26,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import pytest
-
-import llm_usage.mcp.server as server_module
 from llm_usage.mcp.server import server
 
 
@@ -141,25 +141,3 @@ def test_usage_summary_period_renders_enum_with_week_default() -> None:
 def test_two_resources_registered() -> None:
     uris = {str(r.uri) for r in _list_resources()}
     assert uris == _EXPECTED_RESOURCES
-
-
-# --- stub behavior ---------------------------------------------------------
-
-
-def test_unwired_tool_bodies_still_raise_not_implemented() -> None:
-    """The 2 not-yet-wired tools raise.
-
-    `record_usage` is tested in `test_recording.py`; `compare_providers`
-    in `test_compare_providers.py`; `recommend_provider` in
-    `test_recommend_provider.py`; `list_providers`, `get_pricing` and
-    the 2 resources in `test_read_path_tools.py` — all against real
-    seeded DBs.
-    """
-
-    async def run_all() -> None:
-        with pytest.raises(NotImplementedError):
-            await server_module.query_spend()
-        with pytest.raises(NotImplementedError):
-            await server_module.usage_summary()
-
-    asyncio.run(run_all())

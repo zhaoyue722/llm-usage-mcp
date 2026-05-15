@@ -129,7 +129,7 @@ llm-usage-mcp/
 
 ```sql
 CREATE TABLE usage_events (
-    id              TEXT PRIMARY KEY,         -- uuid7
+    id              TEXT PRIMARY KEY,         -- uuid4 in v1; uuid7 when we have a reason
     timestamp       INTEGER NOT NULL,          -- ms epoch
     provider        TEXT NOT NULL,             -- "anthropic", "openai", "qwen", ...
     model           TEXT NOT NULL,             -- "claude-sonnet-4-6", ...
@@ -235,6 +235,14 @@ returns:
   ]
 ```
 
+> **v1 implementation notes.**
+> - Window is **half-open** `[start, end)` so adjacent windows tile without double-counting a boundary event.
+> - ISO-8601 parsing accepts trailing-`Z`, explicit offsets (`+00:00`), and naive strings; **naive is interpreted as UTC** so the result doesn't depend on where the server runs.
+> - `group_by="tag"` skips events with NULL/empty tags. Multi-tag events contribute once per tag, so per-group `calls` sums can exceed the window total (tags don't partition rows — see the rationale captured in `docs/re_evaluation_2026_05_15.md`).
+> - `group_by="project"` is symmetric: NULL projects are dropped.
+> - `group_by="day"` keys are `YYYY-MM-DD` calendar dates in UTC.
+> - Groups are ordered cost-desc with alphabetical key tie-break.
+
 ### `compare_providers`
 
 Given an estimated workload, projects cost across all known providers/models.
@@ -317,6 +325,11 @@ returns:
   top_models:       [{ model, cost_usd, pct }]
   largest_call:     { id, model, cost_usd, timestamp } | null  # null when zero events in window
 ```
+
+> **v1 implementation notes.**
+> - Period boundaries are **calendar UTC**: `today` = since 00:00 UTC today; `week` = since Monday 00:00 UTC of the current ISO week; `month` = since the 1st of the current month; `year` = since January 1st. Calendar (rather than rolling) matches how spend is mentally tracked — "this month" means since the 1st, not the last 30 days.
+> - `top_providers` and `top_models` are capped at **3** (smallest count that still shows leader/runner-up/context); `pct` is each group's share of `total_cost_usd`, rounded to 2 dp. Each list is `[]` on empty windows.
+> - `largest_call` ties break on `id` ascending so re-runs are deterministic.
 
 ### `list_providers`
 
