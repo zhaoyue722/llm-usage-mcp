@@ -1,4 +1,4 @@
-"""MCP server: 7 tools + 2 resources.
+"""MCP server: 7 tools + 2 resources, all wired.
 
 This module wires up the JSON-RPC surface defined in `docs/spec.md` using
 the official `mcp[cli]` SDK's `FastMCP`. Every tool's signature mirrors
@@ -8,15 +8,13 @@ wrap the schema in a redundant `{"params": {...}}` envelope), and every
 tool's return type is the matching `*Result` model so the structured-
 output JSON schema is generated automatically.
 
-Status:
-
-- **Wired up**: `record_usage` (write path), `list_providers`,
-  `get_pricing`, `compare_providers`, `recommend_provider`,
-  `usage://pricing_table`, `usage://recent_events`. These read/write
-  the database that `bootstrap()` seeds on first run.
-- **Stubs** (still raise `NotImplementedError`): `query_spend`,
-  `usage_summary`. Their schemas are locked so MCP clients see the
-  full surface; bodies land tool-by-tool in follow-up changes.
+Tool bodies stay thin: this layer is responsible for I/O concerns
+(session acquisition, ISO-8601 parsing for `query_spend`'s window
+strings) while the domain logic lives in `core/` modules — pricing
+math in `core/pricing.py`, write-path in `core/recording.py`, aggregate
+reads in `core/spend.py`. The exception is `recommend_provider`, whose
+selection logic is short enough to live inline (`_project_costs` +
+`_build_reasoning`) without justifying its own module.
 """
 
 from __future__ import annotations
@@ -46,6 +44,11 @@ from llm_usage.core.models import (
 )
 from llm_usage.core.pricing import CostCalculator, Pricing, all_pricing, nano_to_usd
 from llm_usage.core.recording import record_event
+from llm_usage.core.spend import (
+    aggregate_spend,
+    parse_iso_to_ms,
+    summarize_usage,
+)
 
 server: FastMCP = FastMCP(name="llm-usage")
 
@@ -269,10 +272,29 @@ async def query_spend(
 ) -> QuerySpendResult:
     """Return spending broken down by a chosen axis over a time window.
 
-    `start` and `end` are ISO-8601 strings; default window is the last
+    `start` and `end` are ISO-8601 strings (trailing-`Z`, `+00:00`, or
+    naive — naive is interpreted as UTC). Default window is the last
     30 days. `group_by` is one of provider | model | project | tag | day.
+    `filter` AND-combines optional provider/model/project equality
+    predicates.
+
+    Tag semantics: events with NULL/empty tags are excluded from
+    `group_by="tag"` results entirely; multi-tag events contribute once
+    per tag (so per-group `calls` sums can exceed the window total).
+    Project semantics are symmetric: NULL projects are dropped from
+    `group_by="project"`. Groups are ordered cost-desc with
+    alphabetical ties.
     """
-    raise NotImplementedError("query_spend stub")
+    start_ms = parse_iso_to_ms(start) if start is not None else None
+    end_ms = parse_iso_to_ms(end) if end is not None else None
+    with get_session() as session:
+        return aggregate_spend(
+            session,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            group_by=group_by,
+            filter=filter,
+        )
 
 
 @server.tool()
@@ -421,11 +443,18 @@ async def get_pricing(
 
 @server.tool()
 async def usage_summary(period: Period = "week") -> UsageSummaryResult:
-    """Return a one-shot summary of usage over `period`.
+    """Return a one-shot summary of usage over a named calendar period.
 
-    Period is one of today | week | month | year; default is "week".
+    `period` is one of today | week | month | year (default: "week").
+    Boundaries are calendar UTC: `today` = since 00:00 UTC today,
+    `week` = since Monday 00:00 UTC, `month` = since the 1st of the
+    month, `year` = since January 1st. Returns totals, the top-3
+    providers and top-3 models by cost (with `pct` of total), and the
+    single most expensive call in the window — or `largest_call=None`
+    when the window is empty.
     """
-    raise NotImplementedError("usage_summary stub")
+    with get_session() as session:
+        return summarize_usage(session, period=period)
 
 
 @server.tool()
