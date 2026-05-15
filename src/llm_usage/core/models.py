@@ -45,8 +45,6 @@ class ResultBase(BaseModel):
 # --- enum-shaped fields ----------------------------------------------------
 
 GroupBy = Literal["provider", "model", "project", "tag", "day"]
-TaskType = Literal["chat", "code", "reasoning", "extraction"]
-QualityPriority = Literal["lowest_cost", "balanced", "highest_quality"]
 Period = Literal["today", "week", "month", "year"]
 
 
@@ -115,9 +113,7 @@ class QuerySpendResult(ResultBase):
 class CompareProvidersParams(ParamsBase):
     expected_input_tokens: int
     expected_output_tokens: int
-    task_type: TaskType | None = None
     models: list[str] | None = None
-    include_cached_estimate: bool = False
 
 
 class RankedEntry(ResultBase):
@@ -125,6 +121,10 @@ class RankedEntry(ResultBase):
     model: str
     cost_usd: float
     relative_cost_pct: float
+    # Per-row note slot from the spec (`notes: string|null`). v1 never
+    # writes a value here — left in the schema so a future per-model
+    # caveat (e.g., "tiered pricing approximated") doesn't require a
+    # schema change. Always `None` today.
     notes: str | None
 
 
@@ -140,7 +140,6 @@ class RecommendProviderParams(ParamsBase):
     expected_input_tokens: int | None = None
     expected_output_tokens: int | None = None
     budget_usd: float | None = None
-    quality_priority: QualityPriority | None = None
 
 
 class RecommendProviderResult(ResultBase):
@@ -204,7 +203,10 @@ class UsageSummaryResult(ResultBase):
     call_count: int
     top_providers: list[TopProvider]
     top_models: list[TopModel]
-    largest_call: LargestCall
+    # `None` when the window has zero recorded events — required-field
+    # `LargestCall` would otherwise make `usage_summary` un-constructable
+    # on a fresh DB.
+    largest_call: LargestCall | None
 
 
 # --- list_providers --------------------------------------------------------
@@ -237,7 +239,6 @@ __all__ = [
     "Period",
     "PricingEntry",
     "ProviderEntry",
-    "QualityPriority",
     "QuerySpendParams",
     "QuerySpendResult",
     "RankedEntry",
@@ -248,7 +249,6 @@ __all__ = [
     "ResultBase",
     "SpendFilter",
     "SpendGroup",
-    "TaskType",
     "TopModel",
     "TopProvider",
     "UsageSummaryParams",

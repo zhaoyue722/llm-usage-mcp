@@ -29,11 +29,10 @@ from sqlalchemy import func, select
 from sqlalchemy.engine.url import make_url
 
 from llm_usage.config import get_settings
-from llm_usage.core.db.models import PricingSnapshot, QualitySnapshot
+from llm_usage.core.db.models import PricingSnapshot
 from llm_usage.core.db.session import get_session
 from llm_usage.core.pricing import upsert_pricing
 from llm_usage.core.pricing_loader import load_vendored_pricing
-from llm_usage.core.quality import load_vendored_quality, upsert_quality
 
 logger = logging.getLogger(__name__)
 
@@ -106,30 +105,15 @@ def materialize_pricing_if_empty() -> int:
         return written
 
 
-def materialize_quality_if_empty() -> int:
-    """Populate `quality_snapshot` from the vendored JSON on a fresh DB.
-
-    The quality counterpart to `materialize_pricing_if_empty`. Returns
-    the number of rows written; `0` means the table was already
-    populated. Independent of pricing — a future leaderboard importer
-    refreshes only the quality side.
-    """
-    with get_session() as session:
-        existing = session.scalar(select(func.count()).select_from(QualitySnapshot)) or 0
-        if existing > 0:
-            return 0
-        qualities = load_vendored_quality()
-        written = upsert_quality(session, qualities)
-        session.commit()
-        return written
-
-
 def bootstrap() -> None:
-    """Bring the DB up to head schema and seed pricing + quality if empty."""
+    """Bring the DB up to head schema and seed pricing if empty.
+
+    The `quality_snapshot` table is created by the migration but left
+    empty in v1 — `recommend_provider` ranks by cost only. A future
+    release adds a quality importer and a `materialize_quality_*` step
+    here; the table is already in place to receive it.
+    """
     migrate_to_head()
     pricing_rows = materialize_pricing_if_empty()
     if pricing_rows:
         logger.info("materialized %d pricing rows from vendored JSON", pricing_rows)
-    quality_rows = materialize_quality_if_empty()
-    if quality_rows:
-        logger.info("materialized %d quality rows from vendored JSON", quality_rows)

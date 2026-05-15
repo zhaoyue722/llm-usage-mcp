@@ -170,17 +170,28 @@ def test_query_spend_result_with_groups() -> None:
 
 def test_compare_providers_params_required_fields() -> None:
     p = CompareProvidersParams(expected_input_tokens=1000, expected_output_tokens=500)
-    assert p.task_type is None
     assert p.models is None
-    assert p.include_cached_estimate is False  # spec default
 
 
-def test_compare_providers_task_type_rejects_bad_value() -> None:
-    with pytest.raises(ValidationError):
-        CompareProvidersParams(
-            expected_input_tokens=1000,
-            expected_output_tokens=500,
-            task_type="translation",  # type: ignore[arg-type]
+def test_compare_providers_params_rejects_dropped_v1_field() -> None:
+    """`task_type` / `include_cached_estimate` were removed in the v1 honesty
+    pass — see `docs/re_evaluation_2026_05_15.md`. `extra="forbid"` must
+    reject them to prevent silent revival."""
+    with pytest.raises(ValidationError, match=r"extra_forbidden|task_type"):
+        CompareProvidersParams.model_validate(
+            {
+                "expected_input_tokens": 1000,
+                "expected_output_tokens": 500,
+                "task_type": "code",
+            }
+        )
+    with pytest.raises(ValidationError, match=r"extra_forbidden|include_cached_estimate"):
+        CompareProvidersParams.model_validate(
+            {
+                "expected_input_tokens": 1000,
+                "expected_output_tokens": 500,
+                "include_cached_estimate": True,
+            }
         )
 
 
@@ -214,17 +225,19 @@ def test_recommend_provider_params_only_task_description_required() -> None:
     assert p.expected_input_tokens is None
     assert p.expected_output_tokens is None
     assert p.budget_usd is None
-    assert p.quality_priority is None
 
 
-def test_recommend_provider_quality_priority_validates() -> None:
-    p = RecommendProviderParams(task_description="Cheap chat", quality_priority="lowest_cost")
-    assert p.quality_priority == "lowest_cost"
-
-    with pytest.raises(ValidationError):
-        RecommendProviderParams(
-            task_description="x",
-            quality_priority="cheapest",  # type: ignore[arg-type]
+def test_recommend_provider_params_rejects_dropped_v1_field() -> None:
+    """`quality_priority` was removed in the v1 honesty pass — see
+    `docs/re_evaluation_2026_05_15.md`. The post-v1 quality importer
+    re-adds it; until then `extra="forbid"` keeps it from silently
+    returning via a typo."""
+    with pytest.raises(ValidationError, match=r"extra_forbidden|quality_priority"):
+        RecommendProviderParams.model_validate(
+            {
+                "task_description": "x",
+                "quality_priority": "lowest_cost",
+            }
         )
 
 
@@ -302,7 +315,21 @@ def test_usage_summary_result_shape() -> None:
             timestamp=1_700_000_000_000,
         ),
     )
+    assert r.largest_call is not None
     assert r.largest_call.timestamp == 1_700_000_000_000
+
+
+def test_usage_summary_result_largest_call_optional_for_empty_window() -> None:
+    """`largest_call` must be `None`-able so a zero-event window is constructable."""
+    r = UsageSummaryResult(
+        period="week",
+        total_cost_usd=0.0,
+        call_count=0,
+        top_providers=[],
+        top_models=[],
+        largest_call=None,
+    )
+    assert r.largest_call is None
 
 
 def test_largest_call_timestamp_is_int_ms_epoch() -> None:

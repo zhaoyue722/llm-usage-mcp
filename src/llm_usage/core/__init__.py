@@ -25,18 +25,15 @@ from llm_usage.core.pricing_loader import (
     load_vendored_pricing,
     parse_litellm_entry,
 )
-from llm_usage.core.quality import (
-    Quality,
-    all_quality,
-    get_quality,
-    load_vendored_quality,
-    upsert_quality,
-)
 from llm_usage.core.recording import (
     RecordedEvent,
     record_event,
 )
 
+# `QualitySnapshot` is intentionally re-exported even though no code reads
+# or writes it in v1 — the table is reserved for the post-v1 quality /
+# leaderboard importer. Keeping it discoverable means external scripts /
+# tests that want to query the schema don't go hunting in submodules.
 __all__ = [
     "CURRENT_SCHEMA_VERSION",
     "DEFAULT_DB_PATH",
@@ -44,26 +41,21 @@ __all__ = [
     "CostCalculator",
     "Pricing",
     "PricingSnapshot",
-    "Quality",
     "QualitySnapshot",
     "RecordedEvent",
     "SchemaVersion",
     "UsageEvent",
     "all_pricing",
-    "all_quality",
     "create_engine",
     "get_engine",
     "get_pricing",
-    "get_quality",
     "get_session",
     "get_session_factory",
     "load_vendored_pricing",
-    "load_vendored_quality",
     "nano_to_usd",
     "parse_litellm_entry",
     "record_event",
     "resolve_db_url",
     "upsert_pricing",
-    "upsert_quality",
     "usd_to_nano",
 ]

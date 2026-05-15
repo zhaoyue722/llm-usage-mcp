@@ -4,6 +4,12 @@ progress.md
 # Local-only detailed action plan (kept on disk, never pushed)
 docs/detailed_plan.md
 
+# Local-only status snapshot (kept on disk, never pushed)
+docs/status.md
+
+# Local-only one-off review / re-evaluation notes (kept on disk, never pushed)
+docs/re_evaluation_*.md
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
