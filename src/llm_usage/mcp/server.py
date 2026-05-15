@@ -22,7 +22,6 @@ Status:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from typing import Any, Final
 
 from mcp.server.fastmcp import FastMCP
@@ -38,17 +37,14 @@ from llm_usage.core.models import (
     Period,
     PricingEntry,
     ProviderEntry,
-    QualityPriority,
     QuerySpendResult,
     RankedEntry,
     RecommendProviderResult,
     RecordUsageResult,
     SpendFilter,
-    TaskType,
     UsageSummaryResult,
 )
-from llm_usage.core.pricing import CostCalculator, all_pricing, nano_to_usd
-from llm_usage.core.quality import all_quality
+from llm_usage.core.pricing import CostCalculator, Pricing, all_pricing, nano_to_usd
 from llm_usage.core.recording import record_event
 
 server: FastMCP = FastMCP(name="llm-usage")
@@ -69,15 +65,6 @@ _OPENAI_COMPATIBLE: Final[dict[str, bool]] = {
 # has to render the JSON inline in a chat message.
 _RECENT_EVENTS_LIMIT: Final[int] = 50
 
-# Surfaced in `RankedEntry.notes` when `compare_providers` is called with
-# `include_cached_estimate=True`. v1 does not alter the cost figure: the
-# spec never defines what fraction of input to treat as cache hits, and
-# inventing one would mislead. The flag is accepted; this note is honest
-# about what it does (nothing, yet).
-_CACHED_ESTIMATE_NOTE: Final[str] = (
-    "include_cached_estimate accepted but not applied in v1; cost reflects input/output tokens only"
-)
-
 # Workload assumed by `recommend_provider` when the caller doesn't pass
 # `expected_input_tokens` / `expected_output_tokens`. 1k/1k is a
 # generic chat-style turn — large enough that pricing differences show
@@ -86,28 +73,6 @@ _CACHED_ESTIMATE_NOTE: Final[str] = (
 # defaults are in use so the caller knows the estimate is nominal.
 _NOMINAL_INPUT_TOKENS: Final[int] = 1_000
 _NOMINAL_OUTPUT_TOKENS: Final[int] = 1_000
-
-# `quality_priority` default for `recommend_provider`. Matches the
-# tool's docstring contract ("defaults to balanced semantics"); a
-# caller who doesn't care about cost/quality trade-offs gets a sensible
-# middle pick rather than the cheapest or priciest model.
-_DEFAULT_QUALITY_PRIORITY: Final[QualityPriority] = "balanced"
-
-
-@dataclass(frozen=True)
-class _Candidate:
-    """One (provider, model) considered by `recommend_provider`.
-
-    Built from a join of `pricing_snapshot` and `quality_snapshot`:
-    a model needs **both** a price and a quality score to be a
-    candidate. Priced-but-unscored models can't be ranked by the
-    `quality_priority` axis, so they're excluded.
-    """
-
-    provider: str
-    model: str
-    cost_nano_usd: int
-    quality_score: float
 
 
 def _query_pricing(provider: str | None, model: str | None) -> list[PricingEntry]:
@@ -171,94 +136,37 @@ def _event_to_json(row: UsageEvent) -> dict[str, Any]:
     }
 
 
-def _build_candidates(input_tokens: int, output_tokens: int) -> list[_Candidate]:
-    """Join pricing and quality; project each model's cost for the workload.
+def _project_costs(input_tokens: int, output_tokens: int) -> list[tuple[Pricing, int]]:
+    """Project each priced model's cost for the workload, cheapest first.
 
-    Inner join: a model needs both a pricing row and a quality row to
-    become a candidate. The result is in (provider, model) order so
-    `_pick`'s `min`/`max` tie-breakers are deterministic — first-seen
-    wins, which equals alphabetically-first.
+    Read from `pricing_snapshot` only — v1's `recommend_provider` ranks
+    by cost alone (a quality dimension requires real benchmark data
+    that the v1 pricing-data layer does not have). `all_pricing` is
+    pre-sorted by (provider, model), and Python's sort is stable, so
+    cost-equal models break to the alphabetically-first one.
     """
     with get_session() as session:
-        pricings = {(p.provider, p.model): p for p in all_pricing(session)}
-        qualities = all_quality(session)
+        pricings = all_pricing(session)
 
-    candidates: list[_Candidate] = []
-    for q in qualities:
-        pricing = pricings.get((q.provider, q.model))
-        if pricing is None:
-            continue  # scored but unpriced — can't estimate cost
-        cost_nano = CostCalculator(pricing).cost_nano_usd(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
+    projected = [
+        (
+            p,
+            CostCalculator(p).cost_nano_usd(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            ),
         )
-        candidates.append(
-            _Candidate(
-                provider=q.provider,
-                model=q.model,
-                cost_nano_usd=cost_nano,
-                quality_score=q.quality_score,
-            )
-        )
-    return candidates
-
-
-def _pick(pool: list[_Candidate], priority: QualityPriority) -> _Candidate:
-    """Choose one candidate from `pool` according to `priority`.
-
-    `pool` is non-empty and already in (provider, model) order. Python's
-    `min`/`max` return the first extremal element, so equal-key ties
-    break to the alphabetically-first model deterministically.
-    """
-    match priority:
-        case "lowest_cost":
-            return min(pool, key=lambda c: c.cost_nano_usd)
-        case "highest_quality":
-            return max(pool, key=lambda c: c.quality_score)
-        case "balanced":
-            return _pick_balanced(pool)
-
-
-def _pick_balanced(pool: list[_Candidate]) -> _Candidate:
-    """Max of `0.5 * quality_norm + 0.5 * (1 - cost_norm)`.
-
-    Min-max-normalizes cost and quality across the pool, then blends
-    them 50/50. Degenerate cases handle themselves: a single candidate
-    returns itself; a same-cost pool (e.g. zero-token workload) ranks
-    purely by quality; a same-quality pool ranks purely by cost.
-    """
-    costs = _normalize([float(c.cost_nano_usd) for c in pool])
-    qualities = _normalize([c.quality_score for c in pool])
-    blended = [
-        (0.5 * q + 0.5 * (1.0 - cost), cand)
-        for cand, cost, q in zip(pool, costs, qualities, strict=True)
+        for p in pricings
     ]
-    # `max` returns the first maximum; `pool` is pre-sorted by
-    # (provider, model) so ties break alphabetically.
-    return max(blended, key=lambda pair: pair[0])[1]
-
-
-def _normalize(values: list[float]) -> list[float]:
-    """Min-max normalize to [0, 1]. Constant input -> all zeros.
-
-    "Constant input -> all zeros" is the right degenerate behavior
-    here: in `_pick_balanced`'s formula, a constant offset on either
-    component doesn't affect the ranking, so 0.0 (or any other
-    constant) makes that component cancel out.
-    """
-    lo = min(values)
-    hi = max(values)
-    if hi == lo:
-        return [0.0] * len(values)
-    span = hi - lo
-    return [(v - lo) / span for v in values]
+    projected.sort(key=lambda pair: pair[1])
+    return projected
 
 
 def _build_reasoning(
     *,
     task_description: str,
-    priority: QualityPriority,
-    chosen: _Candidate,
+    chosen_pricing: Pricing,
+    chosen_cost_nano: int,
     pool_size: int,
     input_tokens: int,
     output_tokens: int,
@@ -270,35 +178,35 @@ def _build_reasoning(
 
     The reasoning isn't generated by an LLM — it's a template. The
     contract: surface what was assumed (workload defaults, budget
-    constraints) and why this model was chosen, so the caller can
-    sanity-check the recommendation.
+    constraints, that v1 ranks by cost only) and which model was
+    chosen, so the caller can sanity-check the recommendation. The
+    `task_description` is echoed verbatim; v1 does not interpret it.
     """
-    cost_usd = nano_to_usd(chosen.cost_nano_usd)
+    cost_usd = nano_to_usd(chosen_cost_nano)
     workload = f"{input_tokens:,} input / {output_tokens:,} output tokens"
     if tokens_defaulted:
-        workload += " (nominal defaults — specify expected_input_tokens / expected_output_tokens for a precise estimate)"
+        workload += (
+            " (nominal defaults — specify expected_input_tokens / "
+            "expected_output_tokens for a precise estimate)"
+        )
+
+    chosen_name = f"{chosen_pricing.provider}/{chosen_pricing.model}"
 
     if over_budget:
         assert budget_usd is not None
         return (
-            f"For task {task_description!r}: no scored model fits a "
+            f"For task {task_description!r}: no priced model fits a "
             f"${budget_usd:.4f} budget at {workload}. Recommending the "
-            f"cheapest available, {chosen.provider}/{chosen.model} "
-            f"(quality {chosen.quality_score}, estimated ${cost_usd:.4f}). "
+            f"cheapest available, {chosen_name} (estimated ${cost_usd:.4f}). "
             f"Raise the budget or narrow the workload to fit."
         )
 
-    rationale = {
-        "lowest_cost": "cheapest projected cost",
-        "highest_quality": f"highest quality score ({chosen.quality_score})",
-        "balanced": f"best blended cost/quality score (quality {chosen.quality_score})",
-    }[priority]
     budget_note = f" within a ${budget_usd:.4f} budget" if budget_usd is not None else ""
     return (
-        f"For task {task_description!r} with {priority!r} priority{budget_note}: "
-        f"recommending {chosen.provider}/{chosen.model} — the {rationale} "
-        f"among {pool_size} scored model(s). Estimated ${cost_usd:.4f} for "
-        f"{workload}."
+        f"For task {task_description!r}{budget_note}: recommending {chosen_name} — "
+        f"the cheapest projected cost among {pool_size} priced model(s). Estimated "
+        f"${cost_usd:.4f} for {workload}. v1 ranks by cost only; "
+        f"task_description is echoed for context but does not drive selection."
     )
 
 
@@ -371,19 +279,16 @@ async def query_spend(
 async def compare_providers(
     expected_input_tokens: int,
     expected_output_tokens: int,
-    task_type: TaskType | None = None,
     models: list[str] | None = None,
-    include_cached_estimate: bool = False,
 ) -> CompareProvidersResult:
     """Project the cost of a hypothetical workload across providers/models.
 
     Returns models ranked by absolute cost ascending, with
     `relative_cost_pct` measured against the cheapest entry
     (cheapest = 100%). `models`, if given, restricts the comparison to
-    those model names. `task_type` is accepted but does not affect the
-    ranking (cost is task-independent). `include_cached_estimate` is
-    accepted but does not alter the cost figure in v1 — see
-    `_CACHED_ESTIMATE_NOTE`.
+    those model names. Cost is computed from input/output tokens only;
+    `RankedEntry.notes` is always `None` in v1 (the field is retained
+    for future per-row caveats like "tiered pricing approximated").
     """
     with get_session() as session:
         pricings = all_pricing(session)
@@ -391,8 +296,6 @@ async def compare_providers(
     if models is not None:
         wanted = set(models)
         pricings = [p for p in pricings if p.model in wanted]
-
-    note = _CACHED_ESTIMATE_NOTE if include_cached_estimate else None
 
     # Project each model's cost for the hypothetical workload. `pricings`
     # is already sorted by (provider, model), and Python's sort is stable,
@@ -425,7 +328,7 @@ async def compare_providers(
                     model=pricing.model,
                     cost_usd=nano_to_usd(cost_nano),
                     relative_cost_pct=relative_pct,
-                    notes=note,
+                    notes=None,
                 )
             )
 
@@ -438,31 +341,24 @@ async def recommend_provider(
     expected_input_tokens: int | None = None,
     expected_output_tokens: int | None = None,
     budget_usd: float | None = None,
-    quality_priority: QualityPriority | None = None,
 ) -> RecommendProviderResult:
-    """Recommend a single provider/model for a task given priorities.
+    """Recommend the cheapest priced model that fits the workload + budget.
 
-    Candidates are the inner join of `pricing_snapshot` and
-    `quality_snapshot` — a model must have **both** a price and a
-    quality score to be recommendable. The chosen model depends on
-    `quality_priority`:
+    v1 ranks by cost only. A future release will incorporate quality
+    benchmarks (see `quality_snapshot` — the table is reserved for that
+    purpose) and accept a `quality_priority` axis; for v1 those would
+    rely on data we don't yet have, so the surface stays cost-only and
+    honest.
 
-    - `lowest_cost`: cheapest projected cost.
-    - `highest_quality`: highest `quality_score`.
-    - `balanced` (default): a 50/50 blend of min-max-normalized cost
-      and quality across the candidate pool (lower normalized cost +
-      higher normalized quality = higher blended score).
-
-    `budget_usd`, when set, filters out models that exceed it. If
-    nothing fits, the tool falls back to the cheapest model overall
-    (the result fields are required, so there's no "no match" return
-    shape) and the `reasoning` says so plainly. `expected_input_tokens`
-    / `expected_output_tokens` default to a nominal 1k/1k workload
-    when absent; the `reasoning` notes this. `task_description` is
-    echoed into the reasoning but does not drive selection — the tool
-    isn't an LLM and can't interpret free text.
+    `expected_input_tokens` / `expected_output_tokens` default to a
+    nominal 1k/1k workload when absent; the `reasoning` notes when
+    defaults are in use. `budget_usd`, when set, filters out models
+    that exceed it — if nothing fits, falls back to the cheapest model
+    overall (the result fields are required, so there's no "no match"
+    return shape) and the `reasoning` says so plainly.
+    `task_description` is echoed into the reasoning but does not drive
+    selection — the tool isn't an LLM and can't interpret free text.
     """
-    priority: QualityPriority = quality_priority or _DEFAULT_QUALITY_PRIORITY
     input_tokens = (
         expected_input_tokens if expected_input_tokens is not None else _NOMINAL_INPUT_TOKENS
     )
@@ -471,31 +367,29 @@ async def recommend_provider(
     )
     tokens_defaulted = expected_input_tokens is None or expected_output_tokens is None
 
-    candidates = _build_candidates(input_tokens, output_tokens)
-    if not candidates:
+    projected = _project_costs(input_tokens, output_tokens)
+    if not projected:
         raise ValueError(
-            "no scored models available to recommend from; "
-            "is the database bootstrapped? (`quality_snapshot` is empty)"
+            "no priced models available to recommend from; "
+            "is the database bootstrapped? (`pricing_snapshot` is empty)"
         )
 
     if budget_usd is not None:
-        affordable = [c for c in candidates if nano_to_usd(c.cost_nano_usd) <= budget_usd]
+        affordable = [pair for pair in projected if nano_to_usd(pair[1]) <= budget_usd]
     else:
-        affordable = candidates
+        affordable = projected
     over_budget = budget_usd is not None and not affordable
 
-    # When over budget, ignore the requested priority and return the
-    # cheapest available — "your budget is too low, here's the closest"
-    # is more useful than "here's the priciest flagship that doesn't fit".
-    chosen = _pick(
-        candidates if over_budget else affordable, "lowest_cost" if over_budget else priority
-    )
+    # When over budget, fall back to the cheapest available overall —
+    # "your budget is too low, here's the closest" is more useful than
+    # raising.
+    chosen_pricing, chosen_cost_nano = (projected if over_budget else affordable)[0]
 
     reasoning = _build_reasoning(
         task_description=task_description,
-        priority=priority,
-        chosen=chosen,
-        pool_size=len(affordable if not over_budget else candidates),
+        chosen_pricing=chosen_pricing,
+        chosen_cost_nano=chosen_cost_nano,
+        pool_size=len(projected if over_budget else affordable),
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         tokens_defaulted=tokens_defaulted,
@@ -503,9 +397,9 @@ async def recommend_provider(
         over_budget=over_budget,
     )
     return RecommendProviderResult(
-        provider=chosen.provider,
-        model=chosen.model,
-        estimated_cost_usd=nano_to_usd(chosen.cost_nano_usd),
+        provider=chosen_pricing.provider,
+        model=chosen_pricing.model,
+        estimated_cost_usd=nano_to_usd(chosen_cost_nano),
         reasoning=reasoning,
     )
 

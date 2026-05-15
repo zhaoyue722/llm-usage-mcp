@@ -58,16 +58,13 @@ _EXPECTED_TOOL_INPUTS: dict[str, set[str]] = {
     "compare_providers": {
         "expected_input_tokens",
         "expected_output_tokens",
-        "task_type",
         "models",
-        "include_cached_estimate",
     },
     "recommend_provider": {
         "task_description",
         "expected_input_tokens",
         "expected_output_tokens",
         "budget_usd",
-        "quality_priority",
     },
     "get_pricing": {"provider", "model"},
     "usage_summary": {"period"},

@@ -243,9 +243,7 @@ Given an estimated workload, projects cost across all known providers/models.
 parameters:
   expected_input_tokens:  integer required
   expected_output_tokens: integer required
-  task_type:              enum optional      # "chat" | "code" | "reasoning" | "extraction"
   models:                 string[] optional  # restrict to these
-  include_cached_estimate: boolean optional  # default false
 returns:
   ranked: [
     {
@@ -253,14 +251,20 @@ returns:
       model:              string,
       cost_usd:           number,
       relative_cost_pct:  number,            # vs cheapest = 100%
-      notes:              string|null,        # "cache pricing applied", etc.
+      notes:              string|null,        # reserved for per-row caveats; always null in v1
     }
   ]
 ```
 
+> **v1 scope note.** `task_type` and `include_cached_estimate` were
+> removed before shipping: cost is task-independent (`task_type` did
+> not affect ranking) and cache-hit fraction is provider-/workload-
+> specific (no honest single number to apply). They may return in a
+> later release once we have a defensible model for each.
+
 ### `recommend_provider`
 
-Single-best recommendation given priorities.
+Recommends the cheapest priced model that fits the workload + budget.
 
 ```yaml
 parameters:
@@ -268,13 +272,24 @@ parameters:
   expected_input_tokens:  integer optional
   expected_output_tokens: integer optional
   budget_usd:        number optional
-  quality_priority:  enum optional   # "lowest_cost" | "balanced" | "highest_quality"
 returns:
   provider:          string
   model:             string
   estimated_cost_usd: number
   reasoning:         string          # natural-language explanation
 ```
+
+> **v1 scope note.** The original signature accepted a
+> `quality_priority` axis (`"lowest_cost" | "balanced" | "highest_quality"`)
+> backed by a `quality_snapshot` table. v1 ships **cost-only** ranking
+> because the only available quality data was hand-authored editorial
+> estimates — see `docs/re_evaluation_2026_05_15.md`. The
+> `quality_snapshot` table is reserved (migration intact, empty on
+> bootstrap) for a post-v1 release that wires a real leaderboard
+> importer; `quality_priority` returns at that point.
+> `task_description` is echoed into the `reasoning` string but does
+> not drive selection — the tool isn't an LLM and can't interpret
+> free text.
 
 ### `get_pricing`
 
@@ -300,7 +315,7 @@ returns:
   call_count:       integer
   top_providers:    [{ provider, cost_usd, pct }]
   top_models:       [{ model, cost_usd, pct }]
-  largest_call:     { id, model, cost_usd, timestamp }
+  largest_call:     { id, model, cost_usd, timestamp } | null  # null when zero events in window
 ```
 
 ### `list_providers`

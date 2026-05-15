@@ -15,7 +15,7 @@ import pytest
 import llm_usage.mcp.server as server_module
 from llm_usage.bootstrap import migrate_to_head
 from llm_usage.core.db.session import get_session
-from llm_usage.core.models import CompareProvidersResult, TaskType
+from llm_usage.core.models import CompareProvidersResult
 from llm_usage.core.pricing import Pricing, upsert_pricing
 
 # Three controlled models with round per-million rates so both the
@@ -73,9 +73,7 @@ def _compare(
     *,
     expected_input_tokens: int,
     expected_output_tokens: int,
-    task_type: TaskType | None = None,
     models: list[str] | None = None,
-    include_cached_estimate: bool = False,
 ) -> CompareProvidersResult:
     # `@server.tool()` erases the return type for mypy's view; the local
     # annotation pins it back to the real `*Result` model.
@@ -83,9 +81,7 @@ def _compare(
         server_module.compare_providers(
             expected_input_tokens=expected_input_tokens,
             expected_output_tokens=expected_output_tokens,
-            task_type=task_type,
             models=models,
-            include_cached_estimate=include_cached_estimate,
         )
     )
     return result
@@ -168,45 +164,11 @@ def test_zero_token_workload_all_cost_zero_all_100_pct(priced_db: Path) -> None:
         assert entry.relative_cost_pct == 100.0
 
 
-# --- include_cached_estimate / task_type -----------------------------------
+# --- notes field ----------------------------------------------------------
 
 
-def test_cached_estimate_flag_sets_note(priced_db: Path) -> None:
-    result = _compare(
-        expected_input_tokens=1_000_000,
-        expected_output_tokens=0,
-        include_cached_estimate=True,
-    )
-    assert result.ranked
-    for entry in result.ranked:
-        assert entry.notes is not None
-        assert "not applied in v1" in entry.notes
-
-
-def test_cached_estimate_flag_does_not_change_cost(priced_db: Path) -> None:
-    """The flag is accepted but must not alter the projected cost."""
-    without = _compare(expected_input_tokens=1_000_000, expected_output_tokens=500_000)
-    with_flag = _compare(
-        expected_input_tokens=1_000_000,
-        expected_output_tokens=500_000,
-        include_cached_estimate=True,
-    )
-    assert [e.cost_usd for e in without.ranked] == [e.cost_usd for e in with_flag.ranked]
-
-
-def test_no_cached_estimate_leaves_notes_none(priced_db: Path) -> None:
+def test_notes_always_none_in_v1(priced_db: Path) -> None:
+    """`RankedEntry.notes` is reserved for future per-row caveats; v1 leaves it None."""
     result = _compare(expected_input_tokens=100, expected_output_tokens=100)
     assert result.ranked
     assert all(entry.notes is None for entry in result.ranked)
-
-
-def test_task_type_accepted_and_does_not_change_ranking(priced_db: Path) -> None:
-    """task_type is accepted but task-independent — ranking is unchanged."""
-    plain = _compare(expected_input_tokens=1_000, expected_output_tokens=1_000)
-    with_type = _compare(
-        expected_input_tokens=1_000,
-        expected_output_tokens=1_000,
-        task_type="code",
-    )
-    assert [e.model for e in plain.ranked] == [e.model for e in with_type.ranked]
-    assert [e.cost_usd for e in plain.ranked] == [e.cost_usd for e in with_type.ranked]

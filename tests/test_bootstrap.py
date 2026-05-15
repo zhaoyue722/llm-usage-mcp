@@ -16,7 +16,6 @@ from llm_usage.bootstrap import (
     _find_alembic_root,
     bootstrap,
     materialize_pricing_if_empty,
-    materialize_quality_if_empty,
     migrate_to_head,
 )
 from llm_usage.core.db.models import PricingSnapshot, QualitySnapshot
@@ -77,52 +76,35 @@ def test_materialize_pricing_is_noop_when_already_populated(db_url: str) -> None
     assert row_count == first  # unchanged
 
 
-def test_materialize_quality_populates_empty_table(db_url: str) -> None:
-    migrate_to_head()
-    written = materialize_quality_if_empty()
-    assert written > 0
+def test_quality_snapshot_table_exists_but_stays_empty(db_url: str) -> None:
+    """v1 reserves the table for the post-v1 quality importer; it's created
+    by the migration but never populated by `bootstrap()`."""
+    bootstrap()
+    assert "quality_snapshot" in _table_names()
     with get_session() as session:
-        row_count = session.scalar(select(func.count()).select_from(QualitySnapshot))
-    assert row_count == written
+        quality_count = session.scalar(select(func.count()).select_from(QualitySnapshot))
+    assert quality_count == 0
 
 
-def test_materialize_quality_is_noop_when_already_populated(db_url: str) -> None:
-    migrate_to_head()
-    first = materialize_quality_if_empty()
-    assert first > 0
-
-    second = materialize_quality_if_empty()
-    assert second == 0
-
-    with get_session() as session:
-        row_count = session.scalar(select(func.count()).select_from(QualitySnapshot))
-    assert row_count == first  # unchanged
-
-
-def test_bootstrap_runs_migrations_and_seeds_pricing_and_quality(db_url: str) -> None:
+def test_bootstrap_runs_migrations_and_seeds_pricing(db_url: str) -> None:
     bootstrap()
 
     assert "usage_events" in _table_names()
     with get_session() as session:
         pricing_count = session.scalar(select(func.count()).select_from(PricingSnapshot))
-        quality_count = session.scalar(select(func.count()).select_from(QualitySnapshot))
     assert pricing_count is not None and pricing_count > 0
-    assert quality_count is not None and quality_count > 0
 
 
 def test_bootstrap_is_safe_to_call_twice(db_url: str) -> None:
     bootstrap()
     with get_session() as session:
         pricing_before = session.scalar(select(func.count()).select_from(PricingSnapshot))
-        quality_before = session.scalar(select(func.count()).select_from(QualitySnapshot))
 
     bootstrap()
     with get_session() as session:
         pricing_after = session.scalar(select(func.count()).select_from(PricingSnapshot))
-        quality_after = session.scalar(select(func.count()).select_from(QualitySnapshot))
 
     assert pricing_after == pricing_before
-    assert quality_after == quality_before
 
 
 def test_bootstrap_creates_missing_parent_directory(
