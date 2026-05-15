@@ -150,10 +150,11 @@ def test_two_resources_registered() -> None:
 
 
 def test_unwired_tool_bodies_still_raise_not_implemented() -> None:
-    """The 3 not-yet-wired tools raise.
+    """The 2 not-yet-wired tools raise.
 
     `record_usage` is tested in `test_recording.py`; `compare_providers`
-    in `test_compare_providers.py`; `list_providers`, `get_pricing` and
+    in `test_compare_providers.py`; `recommend_provider` in
+    `test_recommend_provider.py`; `list_providers`, `get_pricing` and
     the 2 resources in `test_read_path_tools.py` — all against real
     seeded DBs.
     """
@@ -161,8 +162,6 @@ def test_unwired_tool_bodies_still_raise_not_implemented() -> None:
     async def run_all() -> None:
         with pytest.raises(NotImplementedError):
             await server_module.query_spend()
-        with pytest.raises(NotImplementedError):
-            await server_module.recommend_provider(task_description="x")
         with pytest.raises(NotImplementedError):
             await server_module.usage_summary()
 
