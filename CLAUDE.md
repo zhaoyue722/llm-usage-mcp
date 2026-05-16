@@ -8,14 +8,13 @@ Local-first MCP server that captures LLM API usage across providers (OpenAI, Ant
 
 ## Coding standards
 
-- Python 3.11+, uv (not pip), ruff, mypy --strict
+- Python 3.13+, uv (not pip), ruff, mypy --strict
 - No emojis anywhere (code, logs, prints)
 - Test coverage ≥80% on core; pytest + respx for HTTP mocks
 - Log token counts and metadata; full prompts only when `LLM_USAGE_LOG_PROMPTS=1`
 
 ## Workflow rules
 
-- Work one task at a time from @plan.md; do not jump ahead
 - Before changing the spec or tool signatures, ask
 - "I fixed it" is not enough — prove fixes with a failing-then-passing test
 - When tempted to add a feature not in @docs/spec.md, do not — flag it instead
@@ -30,4 +29,4 @@ Local-first MCP server that captures LLM API usage across providers (OpenAI, Ant
 
 ## Current focus
 
-See @plan.md
+See @docs/detailed_plan.md

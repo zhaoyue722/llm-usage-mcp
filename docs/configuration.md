@@ -25,7 +25,7 @@ The example file is checked in; `.env` is gitignored.
 | `LLM_USAGE_DB_URL` | SQLAlchemy URL | `sqlite:///$HOME/.llm-usage/usage.db` | Location of the local usage database. |
 | `LLM_USAGE_LOG_LEVEL` | enum | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. |
 | `LLM_USAGE_LOG_PROMPTS` | bool | `false` | When true, the capture layer stores full prompts in event metadata. Off by default for privacy. |
-| `LLM_USAGE_PROXY_PORT` | int (1–65535) | `8787` | TCP port for the future OpenAI-compatible capture proxy. |
+| `LLM_USAGE_PROXY_PORT` | int (1–65535) | `5525` | TCP port for the capture proxy. Always bound to `127.0.0.1` (loopback) so the proxy is never reachable from the network. |
 | `LLM_USAGE_ENABLED_PROVIDERS` | CSV | `anthropic,openai,qwen,deepseek` | Providers the proxy / capture layer is expected to serve. Drives `Settings.require_keys()`. |
 | `LLM_USAGE_ANTHROPIC_BASE_URL` | URL | `https://api.anthropic.com` | Override the Anthropic endpoint (gateways, test doubles, regional hosts). |
 | `LLM_USAGE_OPENAI_BASE_URL` | URL | `https://api.openai.com/v1` | OpenAI endpoint override. |

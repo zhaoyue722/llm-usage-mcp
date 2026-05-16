@@ -43,7 +43,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.db_url.startswith("sqlite:///") and s.db_url.endswith(".llm-usage/usage.db")
     assert s.log_level == "INFO"
     assert s.log_prompts is False
-    assert s.proxy_port == 8787
+    assert s.proxy_port == 5525
     assert s.enabled_providers == KNOWN_PROVIDERS
     assert s.anthropic_base_url == "https://api.anthropic.com"
     assert s.openai_base_url == "https://api.openai.com/v1"
@@ -165,7 +165,7 @@ def test_require_keys_raises_with_missing_listed(monkeypatch: pytest.MonkeyPatch
     assert "anthropic" in msg
     assert "qwen" in msg
     assert "deepseek" in msg
-    assert "openai" not in msg.split("missing API keys for enabled providers:")[1].split(".")[0]
+    assert "openai" not in msg.split("missing API keys for required providers:")[1].split(".")[0]
     assert "ANTHROPIC_API_KEY" in msg
     assert "DASHSCOPE_API_KEY" in msg
     assert "DEEPSEEK_API_KEY" in msg
@@ -179,6 +179,31 @@ def test_require_keys_only_checks_enabled(monkeypatch: pytest.MonkeyPatch) -> No
         monkeypatch.delenv(var, raising=False)
 
     Settings().require_keys()
+
+
+def test_require_keys_subset_narrows_the_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller can demand only a specific subset (Phase 1 proxy use case).
+
+    `LLM_USAGE_ENABLED_PROVIDERS` defaults to all four providers, but the
+    Anthropic-only capture proxy shouldn't require OpenAI / Qwen / DeepSeek
+    keys the user hasn't set yet.
+    """
+    for var in ("OPENAI_API_KEY", "DASHSCOPE_API_KEY", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
+
+    Settings().require_keys({"anthropic"})  # subset narrows to just Anthropic
+
+
+def test_require_keys_subset_still_raises_for_missing_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The subset gates whichever providers it names — missing keys still raise."""
+    for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DASHSCOPE_API_KEY", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+
+    with pytest.raises(ConfigurationError, match="anthropic"):
+        Settings().require_keys({"anthropic"})
 
 
 def test_get_settings_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
