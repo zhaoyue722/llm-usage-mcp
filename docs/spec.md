@@ -17,27 +17,26 @@
 
 The product has **three layers**. Build them all in v1; keep each layer minimal.
 
-```
 ┌─────────────────────────────────────────────────────────────┐
 │  Layer 3: MCP Server                                         │
-│   Tools: record_usage, query_spend, compare_providers,       │
-│          recommend_provider, get_pricing, usage_summary      │
+│   Read tools: query_spend, compare_providers,                │
+│               recommend_provider, get_pricing, usage_summary │
+│   Write tool: record_usage (manual entry)                    │
 └──────────────────────────┬──────────────────────────────────┘
-                           │ reads/writes
+                           │ reads + writes
 ┌──────────────────────────▼──────────────────────────────────┐
 │  Layer 2: Core Library + SQLite                              │
 │   - usage events table (provider, model, tokens, cost, ...)  │
 │   - pricing table (vendored JSON, refreshable)               │
 │   - cost calculator (handles cache pricing per provider)     │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ writes
-┌──────────────────────────▼──────────────────────────────────┐
+└──────────────────────────▲──────────────────────────────────┘
+                           │ writes events
+┌──────────────────────────┴──────────────────────────────────┐
 │  Layer 1: Capture (two paths in v1)                          │
 │   - Path A: OpenAI-compatible HTTP proxy (drop-in)           │
 │   - Path B: Python SDK wrappers (anthropic, openai)          │
 │   - Path C (post-v1): hooks for Claude Code                  │
 └─────────────────────────────────────────────────────────────┘
-```
 
 **Key decisions to lock in early**:
 

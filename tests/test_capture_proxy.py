@@ -1,0 +1,354 @@
+"""End-to-end tests for the capture proxy.
+
+Drives the FastAPI app via `httpx.ASGITransport` (no real network bind,
+no real port) and mocks the upstream `api.anthropic.com` with respx.
+Two transports stacked: the test's outer client uses ASGITransport to
+reach the proxy; the proxy's inner client uses respx (which patches
+`httpx.AsyncClient` globally) to reach the "real" Anthropic.
+
+Test pattern: each test spins up the FastAPI app, sets up its respx
+route, makes the call via `asyncio.run`, then asserts both the
+forwarded response shape and the row(s) written to `usage_events`. No
+pytest-asyncio dep — the existing codebase convention is `asyncio.run`
+inside each test, matched here.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+import respx
+from sqlalchemy import select
+
+from llm_usage.bootstrap import migrate_to_head
+from llm_usage.capture.proxy import create_proxy_app
+from llm_usage.config import Settings
+from llm_usage.core.db.models import UsageEvent
+from llm_usage.core.db.session import get_session
+from llm_usage.core.pricing import Pricing, upsert_pricing
+
+_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "sample_responses"
+_OK_RESPONSE: dict[str, Any] = json.loads((_FIXTURE_DIR / "anthropic_messages_ok.json").read_text())
+_UPSTREAM_URL = "https://api.anthropic.com/v1/messages"
+
+
+@pytest.fixture
+def settings_with_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    """Fresh DB seeded with pricing + a server-side Anthropic key in env.
+
+    Also strips ambient `*_proxy` env vars: a developer running with a
+    corporate / SOCKS proxy in their shell would otherwise have httpx
+    try to route the (mocked) upstream call through it, which both
+    defeats respx's interception and can fail outright when SOCKS
+    dependencies aren't installed.
+    """
+    monkeypatch.setenv("LLM_USAGE_DB_URL", f"sqlite:///{tmp_path / 'usage.db'}")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-server-key")
+    monkeypatch.setenv("LLM_USAGE_ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+    for var in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    migrate_to_head()
+    with get_session() as session:
+        upsert_pricing(
+            session,
+            [
+                # Approximate Anthropic rates for the fixture model. Cache
+                # rates are seeded because the fixture response includes
+                # nonzero cache_creation_input_tokens / cache_read_input_tokens;
+                # without them, CostCalculator would raise and the
+                # best-effort recorder would (correctly) drop the event.
+                Pricing(
+                    "anthropic",
+                    "claude-sonnet-4-6",
+                    input_per_million_usd=3.0,
+                    output_per_million_usd=15.0,
+                    cache_write_per_million_usd=3.75,
+                    cache_read_per_million_usd=0.30,
+                    fetched_at=1,
+                ),
+            ],
+        )
+        session.commit()
+    return Settings()
+
+
+@pytest.fixture
+def proxy_app(settings_with_db: Settings) -> Iterator[Any]:
+    """Build the FastAPI app and seed `state.http_client` directly.
+
+    `httpx.ASGITransport` doesn't trigger FastAPI's lifespan handler, so
+    the test bypasses the real connection-pooled client and injects a
+    fresh one. The client gets closed after the test.
+    """
+    app = create_proxy_app(settings_with_db)
+    app.state.http_client = httpx.AsyncClient(timeout=30.0)
+    try:
+        yield app
+    finally:
+        asyncio.run(app.state.http_client.aclose())
+
+
+def _post(
+    app: Any,
+    body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    """Synchronous-looking helper that drives the ASGI app."""
+
+    async def call() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://proxy") as client:
+            return await client.post(
+                "/v1/messages",
+                json=body or {"model": "claude-sonnet-4-6", "messages": []},
+                headers=headers or {},
+            )
+
+    return asyncio.run(call())
+
+
+# --- forwarding + recording ------------------------------------------------
+
+
+@respx.mock
+def test_messages_forwards_response_unchanged_and_records_usage(proxy_app: Any) -> None:
+    """The happy path: 2xx upstream -> client gets the body, event lands."""
+    respx.post(_UPSTREAM_URL).mock(return_value=httpx.Response(200, json=_OK_RESPONSE))
+
+    response = _post(proxy_app)
+
+    assert response.status_code == 200
+    assert response.json() == _OK_RESPONSE  # body forwarded verbatim
+
+    with get_session() as session:
+        events = session.scalars(select(UsageEvent)).all()
+    assert len(events) == 1
+    event = events[0]
+    assert event.provider == "anthropic"
+    assert event.model == "claude-sonnet-4-6"
+    assert event.input_tokens == 100
+    assert event.output_tokens == 50
+    assert event.cache_write_tokens == 10
+    assert event.cache_read_tokens == 5
+    assert event.request_id == "msg_01ABCDEF1234567890abcdef"
+    assert event.success is True
+    # Cost snapshotted at insert. Fixture seeds (3, 15, 3.75, 0.30) per M;
+    # tokens are (100, 50, 10, 5) → 100*3 + 50*15 + 10*3.75 + 5*0.30 = 1089.0
+    # USD-per-million-tokens. nano = round(1089 * 1000) = 1_089_000.
+    assert event.cost_nano_usd == 1_089_000
+
+
+@respx.mock
+def test_idempotency_via_anthropic_message_id(proxy_app: Any) -> None:
+    """Two identical responses (same `id`) yield exactly one row."""
+    respx.post(_UPSTREAM_URL).mock(return_value=httpx.Response(200, json=_OK_RESPONSE))
+
+    _post(proxy_app)
+    _post(proxy_app)
+
+    with get_session() as session:
+        events = session.scalars(select(UsageEvent)).all()
+    assert len(events) == 1
+
+
+# --- header rewrite --------------------------------------------------------
+
+
+@respx.mock
+def test_upstream_sees_server_side_api_key_not_client_auth(proxy_app: Any) -> None:
+    """The client's Authorization / x-api-key MUST NOT leak upstream."""
+    route = respx.post(_UPSTREAM_URL).mock(return_value=httpx.Response(200, json=_OK_RESPONSE))
+
+    _post(
+        proxy_app,
+        headers={
+            "Authorization": "Bearer client-supplied-junk",
+            "x-api-key": "sk-client-pretend",
+        },
+    )
+
+    assert route.called
+    upstream_headers = {k.lower(): v for k, v in route.calls[0].request.headers.items()}
+    assert upstream_headers["x-api-key"] == "sk-test-server-key"
+    assert "authorization" not in upstream_headers
+
+
+@respx.mock
+def test_upstream_sees_anthropic_beta_passthrough(proxy_app: Any) -> None:
+    route = respx.post(_UPSTREAM_URL).mock(return_value=httpx.Response(200, json=_OK_RESPONSE))
+
+    _post(proxy_app, headers={"anthropic-beta": "prompt-caching-2024-07-31"})
+
+    upstream_headers = {k.lower(): v for k, v in route.calls[0].request.headers.items()}
+    assert upstream_headers["anthropic-beta"] == "prompt-caching-2024-07-31"
+
+
+@respx.mock
+def test_upstream_url_includes_v1_messages_against_configured_base(proxy_app: Any) -> None:
+    """Sanity: settings.anthropic_base_url is used as the upstream base."""
+    route = respx.post(_UPSTREAM_URL).mock(return_value=httpx.Response(200, json=_OK_RESPONSE))
+
+    _post(proxy_app)
+
+    assert route.called
+    assert str(route.calls[0].request.url) == _UPSTREAM_URL
+
+
+# --- non-2xx forwarding ----------------------------------------------------
+
+
+@respx.mock
+def test_upstream_4xx_is_forwarded_and_no_event_recorded(proxy_app: Any) -> None:
+    """An upstream client error reaches the caller; we don't fabricate usage."""
+    respx.post(_UPSTREAM_URL).mock(
+        return_value=httpx.Response(
+            429,
+            json={"type": "error", "error": {"type": "rate_limit_error", "message": "slow down"}},
+        )
+    )
+
+    response = _post(proxy_app)
+    assert response.status_code == 429
+    assert response.json()["error"]["type"] == "rate_limit_error"
+
+    with get_session() as session:
+        events = session.scalars(select(UsageEvent)).all()
+    assert events == []
+
+
+@respx.mock
+def test_upstream_5xx_is_forwarded_and_no_event_recorded(proxy_app: Any) -> None:
+    respx.post(_UPSTREAM_URL).mock(return_value=httpx.Response(500, json={"type": "error"}))
+
+    response = _post(proxy_app)
+    assert response.status_code == 500
+
+    with get_session() as session:
+        events = session.scalars(select(UsageEvent)).all()
+    assert events == []
+
+
+# --- streaming rejection ---------------------------------------------------
+
+
+@respx.mock
+def test_stream_true_request_rejected_400_without_calling_upstream(proxy_app: Any) -> None:
+    """Phase 1: streaming returns 400 explaining the limit; upstream untouched."""
+    route = respx.post(_UPSTREAM_URL).mock(return_value=httpx.Response(200, json=_OK_RESPONSE))
+
+    response = _post(proxy_app, body={"model": "claude-sonnet-4-6", "messages": [], "stream": True})
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "invalid_request_error"
+    assert "streaming" in body["error"]["message"].lower()
+    assert not route.called  # upstream never hit
+
+
+# --- best-effort recording -------------------------------------------------
+
+
+@respx.mock
+def test_record_failure_does_not_break_upstream_response(proxy_app: Any, tmp_path: Path) -> None:
+    """If recording raises, the user still gets a clean upstream response."""
+    # Response is missing `id` (one of the required fields); the recorder
+    # logs and skips. The forwarded response is still 200 / unchanged.
+    bad_payload = {**_OK_RESPONSE}
+    del bad_payload["id"]
+    respx.post(_UPSTREAM_URL).mock(return_value=httpx.Response(200, json=bad_payload))
+
+    response = _post(proxy_app)
+    assert response.status_code == 200
+    assert response.json() == bad_payload
+
+    with get_session() as session:
+        events = session.scalars(select(UsageEvent)).all()
+    assert events == []
+
+
+@respx.mock
+def test_record_failure_on_db_lock_does_not_break_upstream_response(
+    proxy_app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any exception from record_event must be swallowed (best-effort capture)."""
+    from llm_usage.capture import anthropic as anthropic_module
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated DB lock")
+
+    monkeypatch.setattr(anthropic_module, "record_event", boom)
+    respx.post(_UPSTREAM_URL).mock(return_value=httpx.Response(200, json=_OK_RESPONSE))
+
+    response = _post(proxy_app)
+    assert response.status_code == 200
+    assert response.json() == _OK_RESPONSE
+
+
+# --- run_proxy boot sequence ----------------------------------------------
+
+
+def test_run_proxy_binds_loopback_and_calls_require_keys(
+    settings_with_db: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run_proxy` must call uvicorn with `host=127.0.0.1` and demand the key.
+
+    Mocks `uvicorn.run` (which would otherwise block the test process)
+    and `bootstrap` (which is exercised elsewhere). The point is to
+    pin the **loopback-only** contract — a regression that changes
+    `host` to `0.0.0.0` would silently expose the proxy to the local
+    network, and this test catches that.
+    """
+    import uvicorn
+
+    from llm_usage.capture import proxy as proxy_module
+    from llm_usage.config import get_settings
+
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_run(*args: object, **kwargs: object) -> None:
+        captured_kwargs.update(kwargs)
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+    get_settings.cache_clear()  # pick up the fixture's env vars
+
+    proxy_module.run_proxy(port=12345, log_level="WARNING")
+
+    assert captured_kwargs["host"] == "127.0.0.1"
+    assert captured_kwargs["port"] == 12345
+    assert captured_kwargs["factory"] is True
+    assert captured_kwargs["log_level"] == "warning"
+
+
+def test_run_proxy_raises_when_anthropic_key_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing ANTHROPIC_API_KEY -> ConfigurationError before binding."""
+    monkeypatch.setenv("LLM_USAGE_DB_URL", f"sqlite:///{tmp_path / 'usage.db'}")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    import uvicorn
+
+    from llm_usage.capture import proxy as proxy_module
+    from llm_usage.config import ConfigurationError, get_settings
+
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: pytest.fail("uvicorn should not run"))
+    get_settings.cache_clear()
+
+    with pytest.raises(ConfigurationError, match="anthropic"):
+        proxy_module.run_proxy()

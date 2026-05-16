@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     db_url: str = Field(default=f"sqlite:///{_DEFAULT_DB_PATH}")
     log_level: LogLevel = "INFO"
     log_prompts: bool = False
-    proxy_port: int = Field(default=8787, ge=1, le=65535)
+    proxy_port: int = Field(default=5525, ge=1, le=65535)
 
     # `NoDecode` tells pydantic-settings not to JSON-decode the env value
     # before handing it to our validator — we accept a CSV string.
@@ -149,24 +149,29 @@ class Settings(BaseSettings):
             case "deepseek":
                 return self.deepseek_base_url
 
-    def require_keys(self) -> None:
-        """Raise `ConfigurationError` if any enabled provider's key is missing.
+    def require_keys(self, providers: set[Provider] | None = None) -> None:
+        """Raise `ConfigurationError` if any required provider's key is missing.
+
+        `providers=None` (default) checks every provider in
+        `self.enabled_providers`. Pass a subset to narrow the gate —
+        the Phase 1 capture proxy serves only Anthropic, so it calls
+        `require_keys({"anthropic"})` instead of demanding OpenAI /
+        DeepSeek / Qwen keys the user hasn't set yet.
 
         Called explicitly by the proxy / SDK-wrapper startup paths. Not
         invoked anywhere implicitly — the MCP server, the CLI, and pure
         library imports stay usable without provider keys (you can query
         cached spend without an API key in hand).
         """
-        missing: list[Provider] = sorted(
-            p for p in self.enabled_providers if self.api_key_for(p) is None
-        )
+        targets = providers if providers is not None else self.enabled_providers
+        missing: list[Provider] = sorted(p for p in targets if self.api_key_for(p) is None)
         if missing:
             raise ConfigurationError(
-                "missing API keys for enabled providers: "
+                "missing API keys for required providers: "
                 + ", ".join(missing)
                 + ". Set the corresponding env var(s): "
                 + ", ".join(_env_var_for(p) for p in missing)
-                + ". Or narrow LLM_USAGE_ENABLED_PROVIDERS to exclude them."
+                + "."
             )
 
 
