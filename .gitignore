@@ -1,5 +1,7 @@
-# Local-only progress log (kept on disk, never pushed)
+# Local-only progress log (split into per-language files; never pushed)
 progress.md
+progress.en.md
+progress.cn.md
 
 # Local-only detailed action plan (kept on disk, never pushed)
 docs/detailed_plan.md
