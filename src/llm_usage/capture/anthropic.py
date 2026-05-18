@@ -15,12 +15,12 @@ plus `anthropic-version` (forwarded or defaulted) and `anthropic-beta`
 if present. Everything else from the client — `Authorization`,
 cookies, hop-by-hop headers, custom telemetry headers — is dropped.
 
-Phase 1 explicitly **rejects** `stream: true` requests with a 400.
-Forwarding without parsing would be silent under-counting (the proxy
-would return SSE chunks to the client but never see the final
-`message_delta` usage block). Streaming support is Phase 2's job; the
-400 tells callers to set `stream: false` or hit Anthropic directly
-until then.
+This module owns the **non-streaming** path (one upstream POST → JSON
+parse → one event row) plus the JSON pre-flight that detects
+`stream: true` and dispatches to `anthropic_streaming.handle_streaming`
+for the SSE path. The two paths share the header whitelist
+(`build_upstream_headers`) and the best-effort recording philosophy
+but otherwise have very different shapes.
 """
 
 from __future__ import annotations
@@ -28,38 +28,18 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Mapping
-from typing import Any, Final
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Request, Response
 
+from llm_usage.capture._anthropic_common import build_upstream_headers
+from llm_usage.capture.anthropic_streaming import handle_streaming
 from llm_usage.config import Settings
 from llm_usage.core.db.session import get_session
 from llm_usage.core.recording import record_event
 
 logger = logging.getLogger(__name__)
-
-# Default value injected when the client doesn't pass an
-# `anthropic-version` header. Matches Anthropic's documented stable
-# version; the proxy forwards whatever the client sent if they did.
-_ANTHROPIC_VERSION_DEFAULT: Final[str] = "2023-06-01"
-
-# Body returned for `stream: true` requests in Phase 1. Shaped like
-# Anthropic's own error envelope so a well-behaved client can parse it
-# the same way it would parse a real `invalid_request_error`.
-_STREAM_REJECTION_BODY: Final[dict[str, Any]] = {
-    "type": "error",
-    "error": {
-        "type": "invalid_request_error",
-        "message": (
-            "Streaming is not yet supported by the local capture proxy. "
-            "Set stream: false to record usage through this proxy, or call "
-            "api.anthropic.com directly while streaming support lands in a "
-            "follow-up release."
-        ),
-    },
-}
 
 
 def build_router(settings: Settings) -> APIRouter:
@@ -80,19 +60,21 @@ def build_router(settings: Settings) -> APIRouter:
 
 
 async def _handle_messages(request: Request, settings: Settings) -> Response:
-    """Top-level orchestrator for one `/v1/messages` call."""
+    """Top-level orchestrator for one `/v1/messages` call.
+
+    Reads the body once, peeks at the JSON for `stream: true`, and
+    dispatches to the streaming sibling when set. Non-streaming
+    requests stay on the simple buffered path below: one POST, parse
+    the JSON, write the event.
+    """
     body = await request.body()
 
     parsed = _safe_parse_json(body)
     if parsed is not None and parsed.get("stream") is True:
-        return Response(
-            content=json.dumps(_STREAM_REJECTION_BODY),
-            status_code=400,
-            media_type="application/json",
-        )
+        return await handle_streaming(request, settings, body)
 
     upstream_url = f"{settings.anthropic_base_url.rstrip('/')}/v1/messages"
-    upstream_headers = _build_upstream_headers(request.headers, settings)
+    upstream_headers = build_upstream_headers(request.headers, settings)
 
     started_at = time.monotonic()
     client: httpx.AsyncClient = request.app.state.http_client
@@ -107,33 +89,6 @@ async def _handle_messages(request: Request, settings: Settings) -> Response:
         status_code=upstream_resp.status_code,
         media_type=upstream_resp.headers.get("content-type"),
     )
-
-
-def _build_upstream_headers(
-    client_headers: Mapping[str, str],
-    settings: Settings,
-) -> dict[str, str]:
-    """Whitelist client headers; always overwrite `x-api-key` server-side.
-
-    Anthropic authenticates via `x-api-key`, not `Authorization: Bearer`.
-    Phase 1's auth decision: the proxy never forwards the client's auth.
-    The user's coding agent doesn't need to know the API key — the proxy
-    holds it. `assert key is not None` is justified because the proxy
-    startup path (`run_proxy()`) calls `Settings.require_keys({"anthropic"})`
-    before binding the port, so any path that reaches this function with
-    a missing key is a bug, not a runtime error.
-    """
-    key = settings.api_key_for("anthropic")
-    assert key is not None, "require_keys() should have caught the missing ANTHROPIC_API_KEY"
-
-    headers: dict[str, str] = {
-        "x-api-key": key.get_secret_value(),
-        "anthropic-version": client_headers.get("anthropic-version", _ANTHROPIC_VERSION_DEFAULT),
-        "content-type": "application/json",
-    }
-    if (beta := client_headers.get("anthropic-beta")) is not None:
-        headers["anthropic-beta"] = beta
-    return headers
 
 
 def _safe_parse_json(body: bytes) -> dict[str, Any] | None:

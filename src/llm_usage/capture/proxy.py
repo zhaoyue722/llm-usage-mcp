@@ -107,7 +107,7 @@ def run_proxy(*, port: int | None = None, log_level: str | None = None) -> None:
     bind_log_level = (log_level if log_level is not None else settings.log_level).lower()
 
     logger.info(
-        "starting capture proxy on http://%s:%d (anthropic only, non-streaming)",
+        "starting capture proxy on http://%s:%d (anthropic, streaming + non-streaming)",
         _BIND_HOST,
         bind_port,
     )

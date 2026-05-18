@@ -7,8 +7,12 @@ loopback interface. The MCP server (Layer 3) reads the events the proxy
 writes; the two layers don't talk to each other directly — both write
 through `core.recording.record_event()` and read through SQLite.
 
-Subsequent phases extend the same FastAPI app: streaming support and
-OpenAI-compatible routes for OpenAI, DeepSeek, and Qwen.
+Streaming (`stream: true`) is handled by `anthropic_streaming`,
+mounted under the same `/v1/messages` route — the orchestrator in
+`anthropic.py` dispatches on the JSON body's `stream` flag.
+
+Subsequent phases extend the same FastAPI app with OpenAI-compatible
+routes for OpenAI, DeepSeek, and Qwen.
 """
 
 from llm_usage.capture.proxy import create_proxy_app, run_proxy
