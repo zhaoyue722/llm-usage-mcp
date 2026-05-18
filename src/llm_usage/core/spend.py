@@ -112,6 +112,7 @@ def aggregate_spend(
     end_ms: int | None,
     group_by: GroupBy,
     filter: SpendFilter | None,
+    include_failed: bool = False,
     now_ms: int | None = None,
 ) -> QuerySpendResult:
     """Compute totals + per-group rollups for the `query_spend` MCP tool.
@@ -121,6 +122,12 @@ def aggregate_spend(
     combines any of provider/model/project equality predicates. Window
     is `[start_ms, end_ms)` — half-open so two adjacent windows tile
     without double-counting a boundary event.
+
+    `include_failed=False` (default) excludes `success=False` rows from
+    totals and groups; pass `True` to include them. The flag affects
+    every leg of the result identically — totals, per-group rollups,
+    and tag groups — so the headline numbers and the per-group numbers
+    are always consistent.
 
     Group results are ordered by cost descending (largest spend first);
     ties break alphabetically on the key. Projects-of-NULL and tags-of-
@@ -133,8 +140,10 @@ def aggregate_spend(
     if start_ms is None:
         start_ms = end_ms - _DEFAULT_QUERY_LOOKBACK_MS
 
-    cost_nano, calls, in_tokens, out_tokens = _totals(session, start_ms, end_ms, filter)
-    groups = _groups(session, start_ms, end_ms, filter, group_by)
+    cost_nano, calls, in_tokens, out_tokens = _totals(
+        session, start_ms, end_ms, filter, include_failed=include_failed
+    )
+    groups = _groups(session, start_ms, end_ms, filter, group_by, include_failed=include_failed)
 
     return QuerySpendResult(
         total_cost_usd=nano_to_usd(cost_nano),
@@ -150,6 +159,8 @@ def _totals(
     start_ms: int,
     end_ms: int,
     filter: SpendFilter | None,
+    *,
+    include_failed: bool,
 ) -> tuple[int, int, int, int]:
     """`(cost_nano, calls, input_tokens, output_tokens)` over the window.
 
@@ -165,7 +176,7 @@ def _totals(
         func.coalesce(func.sum(UsageEvent.input_tokens), 0),
         func.coalesce(func.sum(UsageEvent.output_tokens), 0),
     )
-    stmt = _apply_window_and_filter(stmt, start_ms, end_ms, filter)
+    stmt = _apply_window_and_filter(stmt, start_ms, end_ms, filter, include_failed=include_failed)
     row = session.execute(stmt).one()
     return int(row[0]), int(row[1]), int(row[2]), int(row[3])
 
@@ -176,11 +187,20 @@ def _groups(
     end_ms: int,
     filter: SpendFilter | None,
     group_by: GroupBy,
+    *,
+    include_failed: bool,
 ) -> list[SpendGroup]:
     """Dispatch on `group_by` and return rollups sorted cost-desc."""
     if group_by == "tag":
-        return _tag_groups(session, start_ms, end_ms, filter)
-    return _grouped_by_column(session, start_ms, end_ms, filter, _key_column(group_by))
+        return _tag_groups(session, start_ms, end_ms, filter, include_failed=include_failed)
+    return _grouped_by_column(
+        session,
+        start_ms,
+        end_ms,
+        filter,
+        _key_column(group_by),
+        include_failed=include_failed,
+    )
 
 
 def _key_column(group_by: GroupBy) -> Any:
@@ -216,6 +236,8 @@ def _grouped_by_column(
     end_ms: int,
     filter: SpendFilter | None,
     key_col: Any,
+    *,
+    include_failed: bool,
 ) -> list[SpendGroup]:
     """Build + execute the per-group rollup query for any non-tag axis."""
     stmt = (
@@ -230,7 +252,7 @@ def _grouped_by_column(
         .group_by(key_col)
         .order_by(desc("cost"), "key")
     )
-    stmt = _apply_window_and_filter(stmt, start_ms, end_ms, filter)
+    stmt = _apply_window_and_filter(stmt, start_ms, end_ms, filter, include_failed=include_failed)
     rows = session.execute(stmt).all()
     return [
         SpendGroup(
@@ -249,6 +271,8 @@ def _tag_groups(
     start_ms: int,
     end_ms: int,
     filter: SpendFilter | None,
+    *,
+    include_failed: bool,
 ) -> list[SpendGroup]:
     """Tag rollup via `json_each` — Option A: untagged events excluded.
 
@@ -258,6 +282,11 @@ def _tag_groups(
     cross-joining with the prefiltered events produces (event, tag)
     pairs that group cleanly on `je.value`. Expressed as raw SQL since
     the SQLAlchemy ORM doesn't model TVFs cleanly.
+
+    `include_failed` plumbs through as a bound integer (1 = include, 0
+    = exclude) so the success filter applies inside the CTE alongside
+    the time-window and equality predicates — no separate code path
+    for streams-with-partial-counts.
     """
     sql = text("""
         WITH filtered AS (
@@ -266,6 +295,7 @@ def _tag_groups(
             WHERE timestamp >= :start_ms
               AND timestamp <  :end_ms
               AND tags IS NOT NULL
+              AND (:include_failed = 1 OR success = 1)
               AND (:provider IS NULL OR provider = :provider)
               AND (:model    IS NULL OR model    = :model)
               AND (:project  IS NULL OR project  = :project)
@@ -283,6 +313,7 @@ def _tag_groups(
     params = {
         "start_ms": start_ms,
         "end_ms": end_ms,
+        "include_failed": 1 if include_failed else 0,
         "provider": filter.provider if filter is not None else None,
         "model": filter.model if filter is not None else None,
         "project": filter.project if filter is not None else None,
@@ -305,16 +336,26 @@ def _apply_window_and_filter[T: tuple[Any, ...]](
     start_ms: int,
     end_ms: int,
     filter: SpendFilter | None,
+    *,
+    include_failed: bool,
 ) -> Select[T]:
-    """AND-combine the time window and optional equality filters.
+    """AND-combine the time window, optional equality filters, and the
+    success-only default.
 
     Generic over the `Select`'s tuple shape so callers keep their more
     specific return types (`Select[tuple[int, int, int, int]]` from
     `_totals`, `Select[tuple[str, int, int, int, int]]` from
     `_grouped_by_column`) instead of being downgraded to
     `Select[tuple[object, ...]]`.
+
+    `include_failed=False` (the default) clips `success=1` rows only —
+    matches the spend-tool contract that failure rows (streams that
+    died mid-flight, etc.) are excluded from totals unless explicitly
+    opted in.
     """
     stmt = stmt.where(UsageEvent.timestamp >= start_ms, UsageEvent.timestamp < end_ms)
+    if not include_failed:
+        stmt = stmt.where(UsageEvent.success.is_(True))
     if filter is None:
         return stmt
     if filter.provider is not None:
@@ -333,6 +374,7 @@ def summarize_usage(
     session: Session,
     *,
     period: Period,
+    include_failed: bool = False,
     now_ms: int | None = None,
 ) -> UsageSummaryResult:
     """Compute the `usage_summary` MCP tool's result for a calendar period.
@@ -344,23 +386,39 @@ def summarize_usage(
     `None` when the window has zero events — matches the result
     schema's `LargestCall | None` to keep `usage_summary` valid on a
     fresh DB.
+
+    `include_failed=False` (default) clips every read to `success=1`
+    rows so totals, the top-N rollups, and `largest_call` are all
+    consistent with each other and with the spend tool's contract.
     """
     if now_ms is None:
         now_ms = int(time.time() * 1000)
     start_ms, end_ms = period_window(period, now_ms)
 
-    total_cost_nano, call_count = _summary_totals(session, start_ms, end_ms)
+    total_cost_nano, call_count = _summary_totals(
+        session, start_ms, end_ms, include_failed=include_failed
+    )
 
     top_providers = [
         TopProvider(provider=key, cost_usd=cost_usd, pct=pct)
         for key, cost_usd, pct in _top_n_by(
-            session, start_ms, end_ms, UsageEvent.provider, total_cost_nano
+            session,
+            start_ms,
+            end_ms,
+            UsageEvent.provider,
+            total_cost_nano,
+            include_failed=include_failed,
         )
     ]
     top_models = [
         TopModel(model=key, cost_usd=cost_usd, pct=pct)
         for key, cost_usd, pct in _top_n_by(
-            session, start_ms, end_ms, UsageEvent.model, total_cost_nano
+            session,
+            start_ms,
+            end_ms,
+            UsageEvent.model,
+            total_cost_nano,
+            include_failed=include_failed,
         )
     ]
 
@@ -370,18 +428,25 @@ def summarize_usage(
         call_count=call_count,
         top_providers=top_providers,
         top_models=top_models,
-        largest_call=_largest_call(session, start_ms, end_ms),
+        largest_call=_largest_call(session, start_ms, end_ms, include_failed=include_failed),
     )
 
 
-def _summary_totals(session: Session, start_ms: int, end_ms: int) -> tuple[int, int]:
+def _summary_totals(
+    session: Session,
+    start_ms: int,
+    end_ms: int,
+    *,
+    include_failed: bool,
+) -> tuple[int, int]:
     """`(total_cost_nano, call_count)` over the period — no filter axis."""
-    row = session.execute(
-        select(
-            func.coalesce(func.sum(UsageEvent.cost_nano_usd), 0),
-            func.count(),
-        ).where(UsageEvent.timestamp >= start_ms, UsageEvent.timestamp < end_ms)
-    ).one()
+    stmt = select(
+        func.coalesce(func.sum(UsageEvent.cost_nano_usd), 0),
+        func.count(),
+    ).where(UsageEvent.timestamp >= start_ms, UsageEvent.timestamp < end_ms)
+    if not include_failed:
+        stmt = stmt.where(UsageEvent.success.is_(True))
+    row = session.execute(stmt).one()
     return int(row[0]), int(row[1])
 
 
@@ -391,6 +456,8 @@ def _top_n_by(
     end_ms: int,
     key_col: Any,
     total_cost_nano: int,
+    *,
+    include_failed: bool,
 ) -> list[tuple[str, float, float]]:
     """Return up to `_TOP_N` `(key, cost_usd, pct)` rows, cost-desc.
 
@@ -409,6 +476,8 @@ def _top_n_by(
         .order_by(desc("cost"), "key")
         .limit(_TOP_N)
     )
+    if not include_failed:
+        stmt = stmt.where(UsageEvent.success.is_(True))
     rows = session.execute(stmt).all()
     result: list[tuple[str, float, float]] = []
     for row in rows:
@@ -418,7 +487,13 @@ def _top_n_by(
     return result
 
 
-def _largest_call(session: Session, start_ms: int, end_ms: int) -> LargestCall | None:
+def _largest_call(
+    session: Session,
+    start_ms: int,
+    end_ms: int,
+    *,
+    include_failed: bool,
+) -> LargestCall | None:
     """The single highest-cost event in the window, or `None` if empty.
 
     Ties break on insertion order via `id ASC` so re-runs are
@@ -427,12 +502,15 @@ def _largest_call(session: Session, start_ms: int, end_ms: int) -> LargestCall |
     full window scan + sort — acceptable at the local-SQLite scale
     this product targets.
     """
-    row = session.scalars(
+    stmt = (
         select(UsageEvent)
         .where(UsageEvent.timestamp >= start_ms, UsageEvent.timestamp < end_ms)
         .order_by(desc(UsageEvent.cost_nano_usd), UsageEvent.id)
         .limit(1)
-    ).first()
+    )
+    if not include_failed:
+        stmt = stmt.where(UsageEvent.success.is_(True))
+    row = session.scalars(stmt).first()
     if row is None:
         return None
     return LargestCall(

@@ -54,7 +54,7 @@ _EXPECTED_TOOL_INPUTS: dict[str, set[str]] = {
         "tags",
         "metadata",
     },
-    "query_spend": {"start", "end", "group_by", "filter"},
+    "query_spend": {"start", "end", "group_by", "filter", "include_failed"},
     "compare_providers": {
         "expected_input_tokens",
         "expected_output_tokens",
@@ -67,7 +67,7 @@ _EXPECTED_TOOL_INPUTS: dict[str, set[str]] = {
         "budget_usd",
     },
     "get_pricing": {"provider", "model"},
-    "usage_summary": {"period"},
+    "usage_summary": {"period", "include_failed"},
     "list_providers": set(),
 }
 
