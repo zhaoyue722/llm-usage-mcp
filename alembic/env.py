@@ -17,7 +17,13 @@ from llm_usage.core import Base, resolve_db_url
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False` keeps our app's loggers (and
+    # pytest's caplog handler) attached after fileConfig runs.
+    # Default behavior would silently kill any logger configured by
+    # the caller before `bootstrap()` reaches alembic — including
+    # test capture handlers — so warnings emitted later in the boot
+    # sequence become invisible.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option("sqlalchemy.url", resolve_db_url())
 

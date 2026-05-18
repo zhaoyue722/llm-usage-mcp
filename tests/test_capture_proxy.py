@@ -556,20 +556,41 @@ def test_run_proxy_binds_loopback_and_calls_require_keys(
     assert captured_kwargs["log_level"] == "warning"
 
 
-def test_run_proxy_raises_when_anthropic_key_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_run_proxy_warns_but_starts_with_missing_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Missing ANTHROPIC_API_KEY -> ConfigurationError before binding."""
+    """No keys configured -> proxy still starts; one WARNING per enabled provider.
+
+    Per-request 503s handle the runtime case (a request to a route
+    whose key is missing); the startup-time job is to log warnings so
+    a misconfigured user sees the problem before the request fails.
+    """
     monkeypatch.setenv("LLM_USAGE_DB_URL", f"sqlite:///{tmp_path / 'usage.db'}")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for env in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "DASHSCOPE_API_KEY"):
+        monkeypatch.delenv(env, raising=False)
 
     import uvicorn
 
     from llm_usage.capture import proxy as proxy_module
-    from llm_usage.config import ConfigurationError, get_settings
+    from llm_usage.config import get_settings
 
-    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: pytest.fail("uvicorn should not run"))
+    captured: dict[str, object] = {}
+
+    def fake_run(*args: object, **kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
     get_settings.cache_clear()
 
-    with pytest.raises(ConfigurationError, match="anthropic"):
-        proxy_module.run_proxy()
+    # caplog captures at root by default; widen to WARNING in case the
+    # log level inherits something more permissive from a prior test.
+    caplog.set_level("WARNING")
+    proxy_module.run_proxy()
+
+    # uvicorn was reached — startup didn't bail.
+    assert captured.get("host") == "127.0.0.1"
+    # Every enabled provider got a warning naming itself.
+    warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
+    warning_text = "\n".join(r.getMessage() for r in warning_records)
+    for provider in ("anthropic", "openai", "deepseek", "qwen"):
+        assert provider in warning_text, f"{provider} missing from: {warning_text!r}"
