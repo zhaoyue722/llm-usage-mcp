@@ -106,6 +106,7 @@ def _query(
     end: str | None = _SEED_END,
     group_by: GroupBy = "provider",
     filter: SpendFilter | None = None,
+    include_failed: bool = False,
 ) -> QuerySpendResult:
     """Call `query_spend` with an explicit window that covers seeded events.
 
@@ -115,7 +116,13 @@ def _query(
     test below.
     """
     result: QuerySpendResult = asyncio.run(
-        server_module.query_spend(start=start, end=end, group_by=group_by, filter=filter)
+        server_module.query_spend(
+            start=start,
+            end=end,
+            group_by=group_by,
+            filter=filter,
+            include_failed=include_failed,
+        )
     )
     return result
 
@@ -295,3 +302,89 @@ def test_window_naive_iso_treated_as_utc(seeded_db: Path) -> None:
     """A naive ISO-8601 string is interpreted as UTC, not local time."""
     r = _query(start="2026-05-14T00:00:00", end="2026-05-16T00:00:00")
     assert r.total_calls == 2
+
+
+# --- include_failed --------------------------------------------------------
+
+
+@pytest.fixture
+def seeded_db_with_failure(seeded_db: Path) -> Path:
+    """Seeded baseline + one failure row from a streamed call.
+
+    Mirrors what the streaming proxy writes on a mid-flight failure:
+    `success=False`, partial counts from the last `message_delta`
+    observed (here: input=2_000_000, output=0), `error_type` set,
+    `request_id=None`. Cost is computed normally — the streaming
+    recorder doesn't fabricate the cost number; if the call accrued
+    1M input tokens at $1/M and 0 output, cost is $2.
+    """
+    with get_session() as session:
+        record_event(
+            session,
+            provider="openai",
+            model="gpt-test",
+            input_tokens=2_000_000,
+            output_tokens=0,
+            success=False,
+            error_type="stream_interrupted",
+            timestamp=_T0_MS - 3 * 3600 * 1000,  # 3h before T0
+        )
+        session.commit()
+    return seeded_db
+
+
+def test_default_excludes_failure_rows_from_totals(seeded_db_with_failure: Path) -> None:
+    """No include_failed=True -> failure row drops out of totals."""
+    r = _query()
+    # Same as the baseline test: 4 success rows summing to $12.
+    assert r.total_cost_usd == pytest.approx(12.0)
+    assert r.total_calls == 4
+    assert r.total_input_tokens == 3_000_000
+
+
+def test_include_failed_true_folds_failure_rows_in(seeded_db_with_failure: Path) -> None:
+    """Opt-in: failure row contributes to totals + groups."""
+    r = _query(include_failed=True)
+    # Baseline $12 + failure $2 = $14; 5 calls; input tokens +2M.
+    assert r.total_cost_usd == pytest.approx(14.0)
+    assert r.total_calls == 5
+    assert r.total_input_tokens == 5_000_000
+
+
+def test_include_failed_propagates_to_grouped_rollups(
+    seeded_db_with_failure: Path,
+) -> None:
+    """Groups are filtered consistently with totals — no skew."""
+    # Default: openai group is the 3 success rows ($3 + $1.5 + $1.5 = $6).
+    default_groups = {g.key: g for g in _query(group_by="provider").groups}
+    assert default_groups["openai"].cost_usd == pytest.approx(6.0)
+    assert default_groups["openai"].calls == 3
+
+    # include_failed: openai group folds the failure row in.
+    inclusive_groups = {g.key: g for g in _query(group_by="provider", include_failed=True).groups}
+    assert inclusive_groups["openai"].cost_usd == pytest.approx(8.0)  # +$2
+    assert inclusive_groups["openai"].calls == 4  # +1
+
+
+def test_include_failed_propagates_to_tag_groups(seeded_db_with_failure: Path) -> None:
+    """The CTE in `_tag_groups` honors include_failed too — symmetric paths."""
+    # Seed an extra tagged failure row so it shows up in tag-grouping.
+    with get_session() as session:
+        record_event(
+            session,
+            provider="openai",
+            model="gpt-test",
+            input_tokens=1_000_000,
+            output_tokens=0,
+            tags=["prod"],
+            success=False,
+            error_type="connection_dropped",
+            timestamp=_T0_MS - 4 * 3600 * 1000,
+        )
+        session.commit()
+
+    default_tags = {g.key: g.calls for g in _query(group_by="tag").groups}
+    inclusive_tags = {g.key: g.calls for g in _query(group_by="tag", include_failed=True).groups}
+    # Baseline `prod` tag: 2 success rows. include_failed adds 1.
+    assert default_tags["prod"] == 2
+    assert inclusive_tags["prod"] == 3

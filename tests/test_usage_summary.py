@@ -150,10 +150,20 @@ def empty_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return db
 
 
-def _summary(period: Period = "week", *, now_ms: int = _T0_MS) -> UsageSummaryResult:
+def _summary(
+    period: Period = "week",
+    *,
+    now_ms: int = _T0_MS,
+    include_failed: bool = False,
+) -> UsageSummaryResult:
     """Bypass the MCP wrapper's wall-clock `time.time()` for determinism."""
     with get_session() as session:
-        return summarize_usage(session, period=period, now_ms=now_ms)
+        return summarize_usage(
+            session,
+            period=period,
+            include_failed=include_failed,
+            now_ms=now_ms,
+        )
 
 
 def test_summary_totals_match_seeded_data(seeded_db: Path) -> None:
@@ -202,6 +212,85 @@ def test_summary_window_excludes_events_outside_period(seeded_db: Path) -> None:
     r = _summary("today", now_ms=_T0_MS + 8 * _DAY)
     assert r.call_count == 0
     assert r.largest_call is None
+
+
+# --- include_failed --------------------------------------------------------
+
+
+def test_default_excludes_failure_rows_from_summary_totals(seeded_db: Path) -> None:
+    """Insert a failure row inside the 'today' window — default summary ignores it."""
+    with get_session() as session:
+        record_event(
+            session,
+            provider="openai",
+            model="gpt-test",
+            input_tokens=1_000_000,
+            output_tokens=0,
+            success=False,
+            error_type="stream_interrupted",
+            timestamp=_T0_MS - 60_000,
+        )
+        session.commit()
+    r = _summary("today")
+    # Same numbers as the baseline `test_summary_totals_match_seeded_data`.
+    assert r.total_cost_usd == pytest.approx(11.25)
+    assert r.call_count == 4
+
+
+def test_include_failed_true_folds_failure_into_totals_and_largest(
+    seeded_db: Path,
+) -> None:
+    """Opt-in: failure row counted in totals AND can be the largest call."""
+    with get_session() as session:
+        # Make this failure row the most expensive event in the window
+        # so we can prove largest_call honors the flag too.
+        record_event(
+            session,
+            provider="openai",
+            model="gpt-test",
+            input_tokens=10_000_000,
+            output_tokens=0,
+            success=False,
+            error_type="stream_interrupted",
+            timestamp=_T0_MS - 60_000,
+        )
+        session.commit()
+
+    r_default = _summary("today")
+    # Baseline largest_call is the $6 claude-test row.
+    assert r_default.largest_call is not None
+    assert r_default.largest_call.model == "claude-test"
+    assert r_default.largest_call.cost_usd == pytest.approx(6.0)
+
+    r_inclusive = _summary("today", include_failed=True)
+    # The failure row at 10M tokens * $1/M input = $10 — beats the $6 claude row.
+    assert r_inclusive.largest_call is not None
+    assert r_inclusive.largest_call.cost_usd == pytest.approx(10.0)
+    assert r_inclusive.call_count == 5
+    assert r_inclusive.total_cost_usd == pytest.approx(11.25 + 10.0)
+
+
+def test_include_failed_propagates_to_top_n_pct(seeded_db: Path) -> None:
+    """`pct` shares are computed against the include-failed-respecting total."""
+    with get_session() as session:
+        record_event(
+            session,
+            provider="openai",
+            model="gpt-test",
+            input_tokens=1_000_000,
+            output_tokens=0,
+            success=False,
+            error_type="stream_interrupted",
+            timestamp=_T0_MS - 60_000,
+        )
+        session.commit()
+
+    r = _summary("today", include_failed=True)
+    # New total: $11.25 (baseline) + $1 (failure, 1M openai input @ $1/M) = $12.25.
+    # openai's success row was $3; plus $1 failure = $4.
+    openai_top = next(p for p in r.top_providers if p.provider == "openai")
+    assert openai_top.cost_usd == pytest.approx(4.0)
+    assert openai_top.pct == round(4.0 / 12.25 * 100, 2)
 
 
 # --- MCP wrapper -----------------------------------------------------------

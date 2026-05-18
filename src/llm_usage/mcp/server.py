@@ -269,6 +269,7 @@ async def query_spend(
     end: str | None = None,
     group_by: GroupBy = "provider",
     filter: SpendFilter | None = None,
+    include_failed: bool = False,
 ) -> QuerySpendResult:
     """Return spending broken down by a chosen axis over a time window.
 
@@ -277,6 +278,11 @@ async def query_spend(
     30 days. `group_by` is one of provider | model | project | tag | day.
     `filter` AND-combines optional provider/model/project equality
     predicates.
+
+    `include_failed` defaults to `False` so failure rows (e.g. streams
+    that died mid-flight with partial counts) are excluded from totals
+    and groups. Pass `True` to fold them back in — useful for debugging
+    capture-layer behavior, not for honest spend numbers.
 
     Tag semantics: events with NULL/empty tags are excluded from
     `group_by="tag"` results entirely; multi-tag events contribute once
@@ -294,6 +300,7 @@ async def query_spend(
             end_ms=end_ms,
             group_by=group_by,
             filter=filter,
+            include_failed=include_failed,
         )
 
 
@@ -442,7 +449,10 @@ async def get_pricing(
 
 
 @server.tool()
-async def usage_summary(period: Period = "week") -> UsageSummaryResult:
+async def usage_summary(
+    period: Period = "week",
+    include_failed: bool = False,
+) -> UsageSummaryResult:
     """Return a one-shot summary of usage over a named calendar period.
 
     `period` is one of today | week | month | year (default: "week").
@@ -452,9 +462,14 @@ async def usage_summary(period: Period = "week") -> UsageSummaryResult:
     providers and top-3 models by cost (with `pct` of total), and the
     single most expensive call in the window — or `largest_call=None`
     when the window is empty.
+
+    `include_failed` defaults to `False`: totals, top-N rollups, and
+    `largest_call` all exclude `success=False` rows (partial-stream
+    captures and other failure rows). Pass `True` for symmetric
+    debugging access to the failure population.
     """
     with get_session() as session:
-        return summarize_usage(session, period=period)
+        return summarize_usage(session, period=period, include_failed=include_failed)
 
 
 @server.tool()

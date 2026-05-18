@@ -218,6 +218,7 @@ parameters:
   group_by:        enum optional             # "provider" | "model" | "project" | "tag" | "day"
                                              # default: "provider"
   filter:          object optional           # {provider?: string, model?: string, project?: string}
+  include_failed:  boolean optional          # default: false — exclude success=False rows
 returns:
   total_cost_usd:  number
   total_calls:     integer
@@ -241,6 +242,12 @@ returns:
 > - `group_by="project"` is symmetric: NULL projects are dropped.
 > - `group_by="day"` keys are `YYYY-MM-DD` calendar dates in UTC.
 > - Groups are ordered cost-desc with alphabetical key tie-break.
+> - `include_failed=false` (default) clips the query to `success=1`
+>   rows. Streamed calls that died mid-flight write `success=False`
+>   rows with partial counts (see `docs/architecture.md` — streaming
+>   capture: partial-count semantics) and would otherwise pollute
+>   spend totals with maybe-billed-maybe-not numbers. Pass
+>   `include_failed=true` to fold them back in for debugging.
 
 ### `compare_providers`
 
@@ -315,7 +322,8 @@ returns:
 
 ```yaml
 parameters:
-  period: enum optional  # "today" | "week" | "month" | "year"  default: "week"
+  period:         enum optional     # "today" | "week" | "month" | "year"  default: "week"
+  include_failed: boolean optional  # default: false — exclude success=False rows
 returns:
   period:           string
   total_cost_usd:   number
@@ -329,6 +337,7 @@ returns:
 > - Period boundaries are **calendar UTC**: `today` = since 00:00 UTC today; `week` = since Monday 00:00 UTC of the current ISO week; `month` = since the 1st of the current month; `year` = since January 1st. Calendar (rather than rolling) matches how spend is mentally tracked — "this month" means since the 1st, not the last 30 days.
 > - `top_providers` and `top_models` are capped at **3** (smallest count that still shows leader/runner-up/context); `pct` is each group's share of `total_cost_usd`, rounded to 2 dp. Each list is `[]` on empty windows.
 > - `largest_call` ties break on `id` ascending so re-runs are deterministic.
+> - `include_failed=false` (default) excludes `success=False` rows from totals, top-N rollups, and `largest_call` — symmetric with `query_spend`. The flag applies uniformly across every leg of the result, so totals and the per-row largest call stay consistent with each other.
 
 ### `list_providers`
 

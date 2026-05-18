@@ -89,6 +89,12 @@ class QuerySpendParams(ParamsBase):
     end: str | None = None  # ISO-8601
     group_by: GroupBy = "provider"
     filter: SpendFilter | None = None
+    # Off by default: failure rows (e.g. streams that died mid-flight
+    # with partial counts) are excluded from totals and groups so a
+    # dashboard built on `query_spend` doesn't mix maybe-billed-maybe-
+    # not numbers into "how much did I spend." Pass `True` to bring
+    # them back in.
+    include_failed: bool = False
 
 
 class SpendGroup(ResultBase):
@@ -176,6 +182,11 @@ class GetPricingResult(ResultBase):
 
 class UsageSummaryParams(ParamsBase):
     period: Period = "week"
+    # Symmetric with `QuerySpendParams.include_failed`: by default the
+    # summary's totals, top-N rollups, and `largest_call` all exclude
+    # failure rows so the headline numbers don't drift on partial
+    # streams.
+    include_failed: bool = False
 
 
 class TopProvider(ResultBase):
