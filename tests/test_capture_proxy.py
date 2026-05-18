@@ -16,6 +16,7 @@ inside each test, matched here.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -243,22 +244,242 @@ def test_upstream_5xx_is_forwarded_and_no_event_recorded(proxy_app: Any) -> None
     assert events == []
 
 
-# --- streaming rejection ---------------------------------------------------
+# --- streaming -------------------------------------------------------------
+
+
+_STREAM_OK_BYTES: bytes = (_FIXTURE_DIR / "anthropic_messages_stream_ok.sse").read_bytes()
+_STREAM_ERR_BYTES: bytes = (_FIXTURE_DIR / "anthropic_messages_stream_error_mid.sse").read_bytes()
+_STREAM_PARTIAL_BYTES: bytes = (
+    _FIXTURE_DIR / "anthropic_messages_stream_only_message_start.sse"
+).read_bytes()
+
+
+class _StreamThenRaise(httpx.AsyncByteStream):
+    """Yields chunks, then raises — simulates an upstream mid-flight failure.
+
+    Implements httpx's `AsyncByteStream` protocol so it can be passed
+    as the `stream=` argument to `httpx.Response`. respx hands the
+    response to our proxy as-is, and our `aiter_raw()` loop sees
+    chunks for a bit and then the exception.
+    """
+
+    def __init__(self, chunks: list[bytes], exc: BaseException) -> None:
+        self._chunks = chunks
+        self._exc = exc
+
+    async def __aiter__(self) -> Any:
+        for c in self._chunks:
+            yield c
+        raise self._exc
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _stream_post(app: Any, body: dict[str, Any]) -> httpx.Response:
+    """Drive the ASGI app with a streaming body request.
+
+    Returns the *fully-buffered* response so tests can introspect
+    bytes + status easily. The proxy itself still streams chunks
+    end-to-end; the buffering is the test harness's call.
+    """
+
+    async def call() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://proxy") as client:
+            return await client.post("/v1/messages", json=body, headers={})
+
+    return asyncio.run(call())
 
 
 @respx.mock
-def test_stream_true_request_rejected_400_without_calling_upstream(proxy_app: Any) -> None:
-    """Phase 1: streaming returns 400 explaining the limit; upstream untouched."""
-    route = respx.post(_UPSTREAM_URL).mock(return_value=httpx.Response(200, json=_OK_RESPONSE))
+def test_stream_forwards_bytes_unchanged_and_records_success(proxy_app: Any) -> None:
+    """Happy path: bytes flow through verbatim, one success row written."""
+    respx.post(_UPSTREAM_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_STREAM_OK_BYTES,
+        )
+    )
 
-    response = _post(proxy_app, body={"model": "claude-sonnet-4-6", "messages": [], "stream": True})
+    response = _stream_post(
+        proxy_app,
+        body={"model": "claude-sonnet-4-6", "messages": [], "stream": True},
+    )
 
-    assert response.status_code == 400
-    body = response.json()
-    assert body["type"] == "error"
-    assert body["error"]["type"] == "invalid_request_error"
-    assert "streaming" in body["error"]["message"].lower()
-    assert not route.called  # upstream never hit
+    assert response.status_code == 200
+    assert response.content == _STREAM_OK_BYTES  # byte-for-byte tee
+
+    with get_session() as session:
+        events = session.scalars(select(UsageEvent)).all()
+    assert len(events) == 1
+    event = events[0]
+    assert event.provider == "anthropic"
+    assert event.model == "claude-sonnet-4-6"
+    assert event.input_tokens == 100
+    # output_tokens comes from message_delta (50), NOT message_start's initial 1.
+    assert event.output_tokens == 50
+    assert event.cache_write_tokens == 10
+    assert event.cache_read_tokens == 5
+    assert event.request_id == "msg_streamtest_ok_123"
+    assert event.success is True
+    assert event.error_type is None
+    # Same pricing as the non-streaming test (3, 15, 3.75, 0.30) →
+    # 100*3 + 50*15 + 10*3.75 + 5*0.30 = 1089.0 USD-per-M-tokens →
+    # nano = round(1089 * 1000) = 1_089_000.
+    assert event.cost_nano_usd == 1_089_000
+
+
+@respx.mock
+def test_stream_idempotency_via_msg_id_from_message_start(proxy_app: Any) -> None:
+    """Two streams returning the same `msg_…` collapse to one row."""
+    respx.post(_UPSTREAM_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_STREAM_OK_BYTES,
+        )
+    )
+
+    _stream_post(proxy_app, body={"model": "claude-sonnet-4-6", "messages": [], "stream": True})
+    _stream_post(proxy_app, body={"model": "claude-sonnet-4-6", "messages": [], "stream": True})
+
+    with get_session() as session:
+        events = session.scalars(select(UsageEvent)).all()
+    assert len(events) == 1
+
+
+@respx.mock
+def test_stream_mid_stream_error_event_records_failure_with_null_request_id(
+    proxy_app: Any,
+) -> None:
+    """`event: error` after `message_start` -> success=False, request_id=NULL."""
+    respx.post(_UPSTREAM_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_STREAM_ERR_BYTES,
+        )
+    )
+
+    response = _stream_post(
+        proxy_app,
+        body={"model": "claude-sonnet-4-6", "messages": [], "stream": True},
+    )
+    assert response.status_code == 200
+    assert response.content == _STREAM_ERR_BYTES  # error event forwarded too
+
+    with get_session() as session:
+        events = session.scalars(select(UsageEvent)).all()
+    assert len(events) == 1
+    event = events[0]
+    assert event.success is False
+    assert event.error_type == "stream_interrupted"
+    assert event.request_id is None  # NULLed per the failure-row contract
+    assert event.input_tokens == 80  # captured from message_start
+    assert event.output_tokens == 0  # no message_delta ever observed
+
+
+@respx.mock
+def test_stream_upstream_connection_drop_records_connection_dropped(proxy_app: Any) -> None:
+    """Upstream TCP drops mid-stream -> `connection_dropped` failure row."""
+    respx.post(_UPSTREAM_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_StreamThenRaise(
+                chunks=[_STREAM_PARTIAL_BYTES],
+                exc=httpx.RemoteProtocolError("simulated tcp drop"),
+            ),
+        )
+    )
+
+    # The client may also see the error propagated; we only care that
+    # the *capture* path wrote the right row.
+    with contextlib.suppress(httpx.RemoteProtocolError):
+        _stream_post(
+            proxy_app,
+            body={"model": "claude-sonnet-4-6", "messages": [], "stream": True},
+        )  # client-side observation of the same drop
+
+    with get_session() as session:
+        events = session.scalars(select(UsageEvent)).all()
+    assert len(events) == 1
+    event = events[0]
+    assert event.success is False
+    assert event.error_type == "connection_dropped"
+    assert event.request_id is None
+    assert event.input_tokens == 42  # from the partial-fixture's message_start
+
+
+@respx.mock
+def test_stream_aborted_before_message_start_records_nothing(proxy_app: Any) -> None:
+    """Asymmetric-rule check: no `message_start` observed -> skip the row."""
+    respx.post(_UPSTREAM_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_StreamThenRaise(
+                chunks=[b""],
+                exc=httpx.RemoteProtocolError("dropped before any data"),
+            ),
+        )
+    )
+
+    with contextlib.suppress(httpx.RemoteProtocolError):
+        _stream_post(
+            proxy_app,
+            body={"model": "claude-sonnet-4-6", "messages": [], "stream": True},
+        )
+
+    with get_session() as session:
+        events = session.scalars(select(UsageEvent)).all()
+    assert events == []  # we have no model + no tokens — record nothing
+
+
+@respx.mock
+def test_stream_upstream_4xx_buffered_and_forwarded_no_row(proxy_app: Any) -> None:
+    """Non-2xx on a streaming request: forwarded as a normal Response, no row."""
+    respx.post(_UPSTREAM_URL).mock(
+        return_value=httpx.Response(
+            429,
+            json={"type": "error", "error": {"type": "rate_limit_error", "message": "slow"}},
+        )
+    )
+
+    response = _stream_post(
+        proxy_app,
+        body={"model": "claude-sonnet-4-6", "messages": [], "stream": True},
+    )
+    assert response.status_code == 429
+    assert response.json()["error"]["type"] == "rate_limit_error"
+
+    with get_session() as session:
+        events = session.scalars(select(UsageEvent)).all()
+    assert events == []
+
+
+@respx.mock
+def test_stream_header_rewrite_still_applies(proxy_app: Any) -> None:
+    """Server-side `x-api-key` + default `anthropic-version` apply to streams too."""
+    route = respx.post(_UPSTREAM_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_STREAM_OK_BYTES,
+        )
+    )
+
+    _stream_post(
+        proxy_app,
+        body={"model": "claude-sonnet-4-6", "messages": [], "stream": True},
+    )
+
+    assert route.called
+    upstream_headers = {k.lower(): v for k, v in route.calls[0].request.headers.items()}
+    assert upstream_headers["x-api-key"] == "sk-test-server-key"
+    assert upstream_headers["anthropic-version"] == "2023-06-01"
 
 
 # --- best-effort recording -------------------------------------------------

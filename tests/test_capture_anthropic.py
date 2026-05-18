@@ -1,9 +1,9 @@
 """Unit tests for `capture/anthropic.py`'s pure helpers.
 
-Side-effect-free pieces (`_build_upstream_headers`, `_response_to_event_args`,
+Side-effect-free pieces (`build_upstream_headers`, `_response_to_event_args`,
 `_safe_parse_json`) get tested here without a FastAPI app or a DB. The
-end-to-end behavior (record_event called with the right args, stream
-rejection, header rewrite landing in the upstream request) lives in
+end-to-end behavior (record_event called with the right args, header
+rewrite landing in the upstream request, streaming dispatch) lives in
 `test_capture_proxy.py`.
 """
 
@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from llm_usage.capture._anthropic_common import build_upstream_headers
 from llm_usage.capture.anthropic import (
-    _build_upstream_headers,
     _response_to_event_args,
     _safe_parse_json,
 )
@@ -31,12 +31,12 @@ def settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     return Settings()
 
 
-# --- _build_upstream_headers ----------------------------------------------
+# --- build_upstream_headers ----------------------------------------------
 
 
 def test_build_upstream_headers_sets_server_side_key_only(settings: Settings) -> None:
     """Client-provided x-api-key / Authorization must NOT survive the rewrite."""
-    headers = _build_upstream_headers(
+    headers = build_upstream_headers(
         {
             "x-api-key": "sk-client-pretend",
             "authorization": "Bearer client-junk",
@@ -51,18 +51,18 @@ def test_build_upstream_headers_sets_server_side_key_only(settings: Settings) ->
 
 
 def test_build_upstream_headers_forwards_anthropic_version_when_set(settings: Settings) -> None:
-    headers = _build_upstream_headers({"anthropic-version": "2024-10-22"}, settings)
+    headers = build_upstream_headers({"anthropic-version": "2024-10-22"}, settings)
     assert headers["anthropic-version"] == "2024-10-22"
 
 
 def test_build_upstream_headers_injects_default_anthropic_version(settings: Settings) -> None:
     """No client-supplied version -> default to the documented stable value."""
-    headers = _build_upstream_headers({}, settings)
+    headers = build_upstream_headers({}, settings)
     assert headers["anthropic-version"] == "2023-06-01"
 
 
 def test_build_upstream_headers_passes_anthropic_beta_through(settings: Settings) -> None:
-    headers = _build_upstream_headers(
+    headers = build_upstream_headers(
         {"anthropic-beta": "prompt-caching-2024-07-31,tools-2024-04-04"},
         settings,
     )
@@ -70,12 +70,12 @@ def test_build_upstream_headers_passes_anthropic_beta_through(settings: Settings
 
 
 def test_build_upstream_headers_omits_beta_when_absent(settings: Settings) -> None:
-    headers = _build_upstream_headers({}, settings)
+    headers = build_upstream_headers({}, settings)
     assert "anthropic-beta" not in headers
 
 
 def test_build_upstream_headers_always_sets_content_type_json(settings: Settings) -> None:
-    headers = _build_upstream_headers({"content-type": "text/plain"}, settings)
+    headers = build_upstream_headers({"content-type": "text/plain"}, settings)
     assert headers["content-type"] == "application/json"
 
 
