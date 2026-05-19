@@ -1,0 +1,21 @@
+{
+  "id": "chatcmpl-qwentest789",
+  "object": "chat.completion",
+  "created": 1714829400,
+  "model": "qwen-turbo",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "你好。"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 18,
+    "completion_tokens": 12,
+    "total_tokens": 30
+  }
+}

@@ -2,11 +2,14 @@
 
 The proxy is the first half of Layer 1 (`docs/spec.md`'s "Path A"):
 a loopback-only HTTP server that the user's coding agent points at
-via `ANTHROPIC_BASE_URL=http://127.0.0.1:5525`. Each request gets
-forwarded to the real provider; the response is parsed for the
-`usage` block and written to the local `usage_events` table on the
-way back. Phase 1 mounts only the Anthropic `/v1/messages` route;
-subsequent phases bolt OpenAI-compatible routes onto the same app.
+via `ANTHROPIC_BASE_URL=http://127.0.0.1:5525` (or
+`OPENAI_BASE_URL=http://127.0.0.1:5525/openai/v1`, and similar for
+DeepSeek and Qwen). Each request gets forwarded to the real provider;
+the response is parsed for the `usage` block and written to the local
+`usage_events` table on the way back. The app mounts four routes:
+Anthropic's native `/v1/messages` (streaming + non-streaming) and one
+`/v1/chat/completions` per OpenAI-compatible provider (non-streaming
+in this release; streaming is a follow-up slice).
 
 Two pieces of public surface:
 
@@ -31,6 +34,12 @@ import httpx
 from fastapi import FastAPI
 
 from llm_usage.capture.anthropic import build_router as build_anthropic_router
+from llm_usage.capture.openai_compatible import (
+    OpenAICompatProvider,
+)
+from llm_usage.capture.openai_compatible import (
+    build_router as build_openai_compatible_router,
+)
 from llm_usage.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -77,21 +86,38 @@ def create_proxy_app(settings: Settings | None = None) -> FastAPI:
     if settings is None:
         settings = get_settings()
     app = FastAPI(title="llm-usage capture proxy", lifespan=_lifespan)
+    # Anthropic gets its own route shape (`/v1/messages`, no prefix)
+    # because Anthropic's wire format differs from the OpenAI family.
     app.include_router(build_anthropic_router(settings))
+    # OpenAI-compatible providers mount under a per-provider prefix so
+    # the URL identifies the upstream (`/openai/v1/chat/completions`,
+    # `/deepseek/v1/chat/completions`, `/qwen/v1/chat/completions`).
+    # Users set `OPENAI_BASE_URL=http://127.0.0.1:5525/openai/v1` and
+    # the SDK appends `/chat/completions`.
+    for provider in _OPENAI_COMPAT_PROVIDERS:
+        app.include_router(
+            build_openai_compatible_router(settings, provider),
+            prefix=f"/{provider}",
+        )
     return app
 
 
+_OPENAI_COMPAT_PROVIDERS: tuple[OpenAICompatProvider, ...] = ("openai", "deepseek", "qwen")
+
+
 def run_proxy(*, port: int | None = None, log_level: str | None = None) -> None:
-    """Bootstrap, gate on Anthropic key, run uvicorn on loopback.
+    """Bootstrap, warn on missing keys, run uvicorn on loopback.
 
     The entry point declared as `llm-usage-proxy` in `pyproject.toml`
     (via `cli.py`). Calls `bootstrap()` so a user who runs *only* the
     proxy (never the MCP server) still gets a migrated DB on first
-    boot. Then `Settings.require_keys({"anthropic"})` — Phase 1 serves
-    only Anthropic, so demanding OpenAI / Qwen / DeepSeek keys would
-    be hostile to a user who hasn't set them yet. Finally `uvicorn.run`
-    with `factory=True` so each worker imports `create_proxy_app` and
-    runs the lifespan to get a fresh `http_client`.
+    boot. Logs a warning for each enabled provider missing a key, but
+    does *not* refuse to start — the per-request handlers return 503
+    if a request hits a route whose key is unset, so a user dogfooding
+    one provider doesn't have to configure four keys upfront. Finally
+    `uvicorn.run` with `factory=True` so each worker imports
+    `create_proxy_app` and runs the lifespan to get a fresh
+    `http_client`.
     """
     import uvicorn  # local import — keeps `from llm_usage.capture import proxy` cheap
 
@@ -100,14 +126,23 @@ def run_proxy(*, port: int | None = None, log_level: str | None = None) -> None:
     settings = get_settings()
     logging.basicConfig(level=settings.log_level)
 
+    # Warn before bootstrap. Alembic's `env.py` calls `fileConfig()`
+    # which *replaces* root-logger handlers (per `alembic.ini`), so any
+    # warning emitted after `bootstrap()` runs is invisible to a
+    # pre-existing test capture handler like pytest's `caplog`. Logging
+    # the missing-key state up-front is also more useful to the human
+    # eyeballing the boot output — the warning lands above the wall of
+    # migration `INFO` lines instead of below it.
+    _warn_about_missing_keys(settings)
+
     bootstrap()
-    settings.require_keys({"anthropic"})
 
     bind_port = port if port is not None else settings.proxy_port
     bind_log_level = (log_level if log_level is not None else settings.log_level).lower()
 
     logger.info(
-        "starting capture proxy on http://%s:%d (anthropic, streaming + non-streaming)",
+        "starting capture proxy on http://%s:%d "
+        "(anthropic streaming + non-streaming; openai / deepseek / qwen non-streaming)",
         _BIND_HOST,
         bind_port,
     )
@@ -118,6 +153,26 @@ def run_proxy(*, port: int | None = None, log_level: str | None = None) -> None:
         port=bind_port,
         log_level=bind_log_level,
     )
+
+
+def _warn_about_missing_keys(settings: Settings) -> None:
+    """Log a WARNING for each enabled provider whose API key isn't set.
+
+    Per the design decision (Phase 3 of the OpenAI-compat slice): the
+    proxy starts regardless of which keys are configured. Per-request
+    handlers return 503 if a request arrives on a route whose key is
+    missing. This function gives upfront visibility so the user
+    doesn't discover the misconfiguration only via a confusing 503
+    after they've already pointed their coding agent at the proxy.
+    """
+    for provider in sorted(settings.enabled_providers):
+        if settings.api_key_for(provider) is None:
+            logger.warning(
+                "%s API key is not configured; %s requests will return 503 "
+                "(set the env var and restart to enable this provider)",
+                provider,
+                provider,
+            )
 
 
 __all__ = ["create_proxy_app", "run_proxy"]
