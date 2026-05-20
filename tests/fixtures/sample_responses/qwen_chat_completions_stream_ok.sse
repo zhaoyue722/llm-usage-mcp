@@ -1,0 +1,10 @@
+data: {"id":"chatcmpl-streamqwen789","object":"chat.completion.chunk","created":1714829400,"model":"qwen-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-streamqwen789","object":"chat.completion.chunk","created":1714829400,"model":"qwen-turbo","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-streamqwen789","object":"chat.completion.chunk","created":1714829400,"model":"qwen-turbo","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"chatcmpl-streamqwen789","object":"chat.completion.chunk","created":1714829400,"model":"qwen-turbo","choices":[],"usage":{"prompt_tokens":18,"completion_tokens":12,"total_tokens":30}}
+
+data: [DONE]
+

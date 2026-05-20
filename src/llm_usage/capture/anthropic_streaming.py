@@ -35,37 +35,22 @@ import logging
 import time
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
-from typing import Final, Literal
 
 import httpx
 from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
 
 from llm_usage.capture._anthropic_common import build_upstream_headers
+from llm_usage.capture._streaming_common import (
+    STREAMING_READ_TIMEOUT_S,
+    UPSTREAM_CONNECT_TIMEOUT_S,
+    ErrorType,
+)
 from llm_usage.config import Settings
 from llm_usage.core.db.session import get_session
 from llm_usage.core.recording import record_event
 
 logger = logging.getLogger(__name__)
-
-# Streaming reads can be quiet for tens of seconds (tool use,
-# extended thinking) without being broken. 60s — our non-streaming
-# default — is tight enough that legitimate slow completions would
-# trip it; 300s keeps a bound so a wedged upstream still escapes.
-_STREAMING_READ_TIMEOUT_S: Final[float] = 300.0
-_UPSTREAM_CONNECT_TIMEOUT_S: Final[float] = 10.0
-
-# All possible `error_type` values written by the streaming path. Kept
-# as a closed `Literal` so static checking catches typos and a future
-# reader can grep for every place each value is produced.
-ErrorType = Literal[
-    "stream_interrupted",
-    "upstream_error",
-    "client_disconnect",
-    "connection_dropped",
-    "timeout",
-    "parse_error",
-]
 
 
 # --- accumulator ------------------------------------------------------------
@@ -221,7 +206,7 @@ async def handle_streaming(request: Request, settings: Settings, body: bytes) ->
         url,
         content=body,
         headers=headers,
-        timeout=httpx.Timeout(_STREAMING_READ_TIMEOUT_S, connect=_UPSTREAM_CONNECT_TIMEOUT_S),
+        timeout=httpx.Timeout(STREAMING_READ_TIMEOUT_S, connect=UPSTREAM_CONNECT_TIMEOUT_S),
     )
     started_at = time.monotonic()
     upstream_resp = await client.send(upstream_request, stream=True)
