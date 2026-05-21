@@ -1,0 +1,62 @@
+name: Refresh pricing data
+
+# Weekly refresh of the vendored LiteLLM pricing snapshot
+# (src/llm_usage/core/pricing_data/prices.json). Runs the same
+# scripts/refresh_pricing.sh a human would run, and opens a pull
+# request when the upstream data has changed.
+#
+# Setup note: creating the PR requires the repository setting
+# Settings -> Actions -> General -> "Allow GitHub Actions to create
+# and approve pull requests" to be enabled. Without it, the workflow
+# succeeds but silently creates no PR.
+
+on:
+  schedule:
+    # 06:00 UTC every Monday.
+    - cron: "0 6 * * 1"
+  # Allow on-demand runs from the Actions tab.
+  workflow_dispatch:
+
+# Least-privilege: the job only needs to push a branch and open a PR.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Refresh prices.json from LiteLLM
+        # curl + jq are preinstalled on ubuntu-latest runners.
+        run: bash scripts/refresh_pricing.sh
+
+      - name: Open a pull request if the data changed
+        # create-pull-request is a no-op when the working tree is
+        # clean, and idempotent when it isn't: re-running updates the
+        # existing `chore/refresh-pricing` PR rather than stacking
+        # duplicates.
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/refresh-pricing
+          delete-branch: true
+          commit-message: "chore(pricing): refresh vendored LiteLLM pricing data"
+          title: "chore(pricing): refresh vendored LiteLLM pricing data"
+          body: |
+            Automated weekly refresh of `src/llm_usage/core/pricing_data/prices.json`
+            from [LiteLLM upstream][src] via `scripts/refresh_pricing.sh`.
+
+            The diff shows real pricing / model changes only — the file is
+            fully key-sorted, so there is no ordering noise.
+
+            **Before merging**, review the diff and run the test suite
+            locally — a refresh can surface a LiteLLM schema change that
+            the pricing loader doesn't handle yet:
+
+            ```
+            uv run pytest tests/test_prices_json.py tests/test_pricing_loader.py
+            ```
+
+            [src]: https://github.com/BerriAI/litellm/blob/main/litellm/model_prices_and_context_window_backup.json
