@@ -19,29 +19,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Any
 
 from pydantic import SecretStr
-
-# Returned verbatim as the 400 body when a client sends `stream: true`
-# in Phase 1 of this module. Shape matches OpenAI's own
-# `invalid_request_error` envelope so a well-behaved client parses
-# this the same way it'd parse a real upstream rejection. Streaming
-# support lands in a follow-up slice.
-STREAM_REJECTION_BODY: Final[dict[str, Any]] = {
-    "error": {
-        "message": (
-            "Streaming is not yet supported by the local capture proxy "
-            "for OpenAI-compatible providers. Set stream: false to "
-            "record usage through this proxy, or call the upstream "
-            "directly while streaming support lands in a follow-up "
-            "release."
-        ),
-        "type": "invalid_request_error",
-        "param": None,
-        "code": None,
-    },
-}
 
 
 # Returned as the 503 body when the client hits a provider's route
@@ -115,7 +95,6 @@ def header_lookup(headers: Mapping[str, str], name: str) -> str | None:
 
 
 __all__ = [
-    "STREAM_REJECTION_BODY",
     "build_upstream_headers",
     "header_lookup",
     "missing_key_envelope",

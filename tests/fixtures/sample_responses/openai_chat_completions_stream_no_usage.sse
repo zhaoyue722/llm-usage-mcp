@@ -1,0 +1,8 @@
+data: {"id":"chatcmpl-streamnousageabc","object":"chat.completion.chunk","created":1714829400,"model":"gpt-5.2","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-streamnousageabc","object":"chat.completion.chunk","created":1714829400,"model":"gpt-5.2","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-streamnousageabc","object":"chat.completion.chunk","created":1714829400,"model":"gpt-5.2","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

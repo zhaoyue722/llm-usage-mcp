@@ -45,11 +45,11 @@ import httpx
 from fastapi import APIRouter, Request, Response
 
 from llm_usage.capture._openai_common import (
-    STREAM_REJECTION_BODY,
     build_upstream_headers,
     missing_key_envelope,
     safe_parse_json,
 )
+from llm_usage.capture.openai_compatible_streaming import handle_streaming
 from llm_usage.config import Settings
 from llm_usage.core.db.session import get_session
 from llm_usage.core.recording import record_event
@@ -71,7 +71,7 @@ TokenExtractor = Callable[[dict[str, Any]], dict[str, Any] | None]
 
 
 @dataclass(frozen=True)
-class _ProviderRoute:
+class ProviderRoute:
     """Static per-provider data the request handler needs.
 
     Frozen so a typo in one of the closures captured at router-build
@@ -97,13 +97,13 @@ def build_router(settings: Settings, provider: OpenAICompatProvider) -> APIRoute
     enough that a `curl` user knows which provider they're hitting
     from the URL alone.
 
-    Per-provider differences are captured in a `_ProviderRoute`
+    Per-provider differences are captured in a `ProviderRoute`
     closure: which upstream URL to POST to, which env var holds the
     key (for the 503 message), and how to extract tokens from the
     response. The handler itself is identical across providers.
     """
     upstream_base = settings.base_url_for(provider).rstrip("/")
-    route = _ProviderRoute(
+    route = ProviderRoute(
         provider=provider,
         upstream_url=f"{upstream_base}/chat/completions",
         env_var_name=_env_var_for(provider),
@@ -122,18 +122,19 @@ def build_router(settings: Settings, provider: OpenAICompatProvider) -> APIRoute
 async def _handle_chat_completions(
     request: Request,
     settings: Settings,
-    route: _ProviderRoute,
+    route: ProviderRoute,
 ) -> Response:
     """Top-level orchestrator for one `/chat/completions` call.
 
-    Three short-circuits before any upstream contact:
+    Branches before any upstream contact:
       1. Missing API key for this provider → 503 with a configuration
          envelope (the proxy holds the key, so this is a server-side
          misconfig, not a client auth failure — 503, not 401).
-      2. `stream: true` in the request body → 400 with the documented
-         OpenAI-shaped envelope. Streaming is a follow-up slice.
-      3. Anything else: forward to upstream, parse on the way back,
-         write the event best-effort.
+      2. `stream: true` in the request body → hand off to
+         `openai_compatible_streaming.handle_streaming` (SSE tee +
+         usage capture from the terminal chunk).
+      3. Anything else: forward non-streaming to upstream, parse on
+         the way back, write the event best-effort.
     """
     key = settings.api_key_for(route.provider)
     if key is None:
@@ -147,11 +148,7 @@ async def _handle_chat_completions(
 
     parsed = safe_parse_json(body)
     if parsed is not None and parsed.get("stream") is True:
-        return Response(
-            content=json.dumps(STREAM_REJECTION_BODY),
-            status_code=400,
-            media_type="application/json",
-        )
+        return await handle_streaming(request, route, body, key)
 
     upstream_headers = build_upstream_headers(key)
 
@@ -172,7 +169,7 @@ async def _handle_chat_completions(
 
 def _record_best_effort(
     upstream_resp: httpx.Response,
-    route: _ProviderRoute,
+    route: ProviderRoute,
     duration_ms: int,
 ) -> None:
     """Parse the response and write an event. Swallow all errors.

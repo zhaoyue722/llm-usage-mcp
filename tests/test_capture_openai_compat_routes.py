@@ -267,23 +267,9 @@ def test_upstream_4xx_is_forwarded_and_no_event_recorded(proxy_app: Any) -> None
     assert events == []
 
 
-@respx.mock
-def test_stream_true_request_rejected_400_without_calling_upstream(proxy_app: Any) -> None:
-    """Phase 1: streaming returns 400; no upstream call. OpenAI-shaped envelope."""
-    route = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={"id": "x", "model": "m", "usage": {}})
-    )
-
-    response = _post(
-        proxy_app,
-        "/openai/v1/chat/completions",
-        body={"model": "gpt-5.2", "messages": [], "stream": True},
-    )
-    assert response.status_code == 400
-    body = response.json()
-    assert body["error"]["type"] == "invalid_request_error"
-    assert "streaming" in body["error"]["message"].lower()
-    assert not route.called
+# `stream: true` is no longer rejected — it dispatches to the
+# streaming handler. That behavior is covered end-to-end in
+# `test_capture_openai_compat_streaming_routes.py`.
 
 
 def test_missing_key_returns_503_without_calling_upstream(
