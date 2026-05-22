@@ -1,0 +1,61 @@
+name: CI
+
+# The full quality gate — lint, format check, type check, and tests
+# with a coverage floor — run on every pull request and every push to
+# main. These are the same checks the project runs locally before each
+# slice; CI is the backstop that keeps main green and gates PRs
+# (including the automated weekly pricing-refresh PRs).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel an in-progress run when a newer commit lands on the same
+# branch — no point spending a runner on superseded code.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# CI only reads the repository.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install uv + Python 3.13
+        uses: astral-sh/setup-uv@v5
+        with:
+          # The project pins requires-python = ">=3.13"; mypy and ruff
+          # are both configured for 3.13. A single version is the right
+          # matrix until the project explicitly supports a newer one.
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install dependencies
+        # `uv sync` installs the project plus the `dev` dependency
+        # group (mypy, pytest, pytest-cov, respx, ruff).
+        run: uv sync
+
+      - name: Lint (ruff)
+        run: uv run ruff check src/ tests/
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check src/ tests/
+
+      - name: Type check (mypy --strict)
+        # mypy reads files = ["src", "tests"] from pyproject.toml.
+        run: uv run mypy
+
+      - name: Tests + coverage floor
+        # `--cov` measures the `src` package (per [tool.coverage.run]);
+        # `--cov-fail-under=80` fails the build if project-wide
+        # coverage drops below 80% (currently ~93%). The gate lives
+        # here rather than in pyproject `addopts` so a local
+        # `uv run pytest` stays fast and uncoupled from coverage.
+        run: uv run pytest --cov --cov-fail-under=80
