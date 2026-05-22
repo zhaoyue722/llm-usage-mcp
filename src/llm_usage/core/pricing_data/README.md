@@ -41,27 +41,31 @@ Provider quirks the loader will need to handle:
 
 ## Refresh procedure
 
-Manual for now (a weekly GitHub Action is on the roadmap):
+Run the refresh script — it downloads LiteLLM's JSON, applies the
+filter below, and rewrites this file:
 
 ```bash
-curl -fsSL -o /tmp/litellm.json \
-  https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/model_prices_and_context_window_backup.json
-
-jq '
-  to_entries
-  | map(select(
-      (.value.litellm_provider == "anthropic" or
-       .value.litellm_provider == "openai" or
-       .value.litellm_provider == "deepseek" or
-       .value.litellm_provider == "dashscope")
-      and (.value.mode == "chat" or .value.mode == "responses")
-      and (.value | has("input_cost_per_token") or has("tiered_pricing"))
-    ))
-  | from_entries
-' /tmp/litellm.json > src/llm_usage/core/pricing_data/prices.json
+bash scripts/refresh_pricing.sh
 ```
 
-The final clause excludes a couple of entries (`dashscope/qwen3-30b-a3b`, `openai/container`) that LiteLLM keeps for metadata but provides no rates for — the loader couldn't price them anyway.
+The script is idempotent: with no upstream change it leaves the file
+byte-identical. It is also what the weekly **Refresh pricing data**
+GitHub Action (`.github/workflows/refresh-pricing.yml`) runs — that
+action opens a PR whenever the refresh produces a diff.
+
+The filter the script applies:
+
+- `litellm_provider` ∈ `{anthropic, openai, deepseek, dashscope}`
+- `mode` ∈ `{chat, responses}`
+- the entry carries rates (`input_cost_per_token` or `tiered_pricing`)
+  — this excludes a couple of metadata-only entries
+  (`dashscope/qwen3-30b-a3b`, `openai/container`) that LiteLLM keeps
+  but provides no prices for; the loader couldn't price them anyway.
+
+Output is written through `jq -S`, so **every key is sorted** — the
+top-level model names and each entry's fields. This keeps the
+committed file deterministic: a refresh diff only ever shows real
+price / model changes, never an ordering reshuffle.
 
 ## Why vendor LiteLLM's shape verbatim instead of converting
 
