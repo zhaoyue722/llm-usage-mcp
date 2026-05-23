@@ -521,6 +521,74 @@ def test_record_failure_on_db_lock_does_not_break_upstream_response(
     assert response.json() == _OK_RESPONSE
 
 
+# --- missing-key 503 -------------------------------------------------------
+
+
+@respx.mock
+def test_missing_anthropic_key_returns_503_without_calling_upstream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No ANTHROPIC_API_KEY in the proxy env -> 503 configuration_error, no upstream POST.
+
+    Mirrors the per-request 503 path on the OpenAI-compatible routes
+    (see test_capture_openai_compat_routes.py). Closes a previously
+    asymmetric gap where the Anthropic route would hit `assert key is
+    not None` in `_anthropic_common.build_upstream_headers` and
+    surface as a 500.
+    """
+    monkeypatch.setenv("LLM_USAGE_DB_URL", f"sqlite:///{tmp_path / 'usage.db'}")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+        monkeypatch.delenv(var.lower(), raising=False)
+    migrate_to_head()
+    route = respx.post(_UPSTREAM_URL).mock(return_value=httpx.Response(200, json=_OK_RESPONSE))
+    app = create_proxy_app(Settings())
+    app.state.http_client = httpx.AsyncClient(timeout=5.0)
+    try:
+        response = _post(app)
+        assert response.status_code == 503
+        body = response.json()
+        # Anthropic-shaped envelope: top-level `type: error`, nested `error.type`.
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "configuration_error"
+        assert "ANTHROPIC_API_KEY" in body["error"]["message"]
+        assert not route.called
+    finally:
+        asyncio.run(app.state.http_client.aclose())
+
+
+@respx.mock
+def test_stream_missing_anthropic_key_returns_503_without_calling_upstream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The streaming dispatch is gated by the same missing-key check.
+
+    The 503 fires in `_handle_messages` *before* the `stream: true`
+    branch dispatches to `handle_streaming`, so a streaming request
+    with no key never reaches the streaming handler at all.
+    """
+    monkeypatch.setenv("LLM_USAGE_DB_URL", f"sqlite:///{tmp_path / 'usage.db'}")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+        monkeypatch.delenv(var.lower(), raising=False)
+    migrate_to_head()
+    route = respx.post(_UPSTREAM_URL).mock(return_value=httpx.Response(200, json=_OK_RESPONSE))
+    app = create_proxy_app(Settings())
+    app.state.http_client = httpx.AsyncClient(timeout=5.0)
+    try:
+        response = _post(
+            app,
+            body={"model": "claude-sonnet-4-6", "messages": [], "stream": True},
+        )
+        assert response.status_code == 503
+        assert response.json()["error"]["type"] == "configuration_error"
+        assert not route.called
+    finally:
+        asyncio.run(app.state.http_client.aclose())
+
+
 # --- run_proxy boot sequence ----------------------------------------------
 
 

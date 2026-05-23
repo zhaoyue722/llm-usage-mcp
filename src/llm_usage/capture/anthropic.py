@@ -33,7 +33,10 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Request, Response
 
-from llm_usage.capture._anthropic_common import build_upstream_headers
+from llm_usage.capture._anthropic_common import (
+    MISSING_KEY_ENVELOPE,
+    build_upstream_headers,
+)
 from llm_usage.capture.anthropic_streaming import handle_streaming
 from llm_usage.config import Settings
 from llm_usage.core.db.session import get_session
@@ -62,19 +65,34 @@ def build_router(settings: Settings) -> APIRouter:
 async def _handle_messages(request: Request, settings: Settings) -> Response:
     """Top-level orchestrator for one `/v1/messages` call.
 
-    Reads the body once, peeks at the JSON for `stream: true`, and
-    dispatches to the streaming sibling when set. Non-streaming
-    requests stay on the simple buffered path below: one POST, parse
-    the JSON, write the event.
+    Branches before any upstream contact:
+      1. Missing `ANTHROPIC_API_KEY` in the proxy environment → 503
+         with a configuration envelope (the proxy holds the key, so
+         this is a server-side misconfig, not a client auth failure
+         — 503, not 401). Mirrors the per-request 503 path on the
+         OpenAI-compatible routes.
+      2. `stream: true` in the request body → dispatch to the
+         streaming sibling, passing the resolved key along so it
+         doesn't have to look it up again.
+      3. Anything else: forward non-streaming to upstream, parse on
+         the way back, write the event best-effort.
     """
+    key = settings.api_key_for("anthropic")
+    if key is None:
+        return Response(
+            content=json.dumps(MISSING_KEY_ENVELOPE),
+            status_code=503,
+            media_type="application/json",
+        )
+
     body = await request.body()
 
     parsed = _safe_parse_json(body)
     if parsed is not None and parsed.get("stream") is True:
-        return await handle_streaming(request, settings, body)
+        return await handle_streaming(request, settings, body, key)
 
     upstream_url = f"{settings.anthropic_base_url.rstrip('/')}/v1/messages"
-    upstream_headers = build_upstream_headers(request.headers, settings)
+    upstream_headers = build_upstream_headers(request.headers, key)
 
     started_at = time.monotonic()
     client: httpx.AsyncClient = request.app.state.http_client
