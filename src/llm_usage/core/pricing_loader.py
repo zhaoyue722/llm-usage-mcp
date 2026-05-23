@@ -19,8 +19,12 @@ Conversions applied:
   `cache_read_input_token_cost` → `cache_read_*`. Either may be absent
   (OpenAI/DeepSeek absorb the write cost into input); absent → `None`.
 - **Tiered pricing**: a few Qwen models only have `tiered_pricing` and
-  no flat rates. v1 stores the first tier as the base rate; richer
-  tier-aware billing is a future enhancement (per spec).
+  no flat rates. The first tier is written into the flat
+  `input_per_million_usd` / `output_per_million_usd` fields as a
+  fallback (so cost code that doesn't yet read tiers keeps working),
+  *and* the full tier list is attached to `Pricing.tiers`. The
+  `upsert_pricing` path then materializes every tier into the
+  `pricing_tier` table.
 - **Duplicates**: LiteLLM occasionally keeps both a bare and a
   namespaced entry for the same model (e.g., `deepseek-chat` and
   `deepseek/deepseek-chat`). After our model-name normalization they
@@ -36,7 +40,7 @@ import time
 from importlib.resources import files
 from typing import Any
 
-from llm_usage.core.pricing import Pricing
+from llm_usage.core.pricing import Pricing, Tier
 
 # LiteLLM provider key -> our provider name. Anything not in this map is
 # silently skipped by `parse_litellm_entry` — keeps the loader inert
@@ -107,6 +111,7 @@ def parse_litellm_entry(
 
     cache_write = entry.get("cache_creation_input_token_cost")
     cache_read = entry.get("cache_read_input_token_cost")
+    tiers = _extract_tiers(entry)
 
     return Pricing(
         provider=provider,
@@ -120,6 +125,7 @@ def parse_litellm_entry(
             cache_read * _PER_MILLION if isinstance(cache_read, int | float) else None
         ),
         fetched_at=fetched_at,
+        tiers=tuple(tiers),
     )
 
 
@@ -158,3 +164,50 @@ def _cache_field_count(pricing: Pricing) -> int:
     return int(pricing.cache_write_per_million_usd is not None) + int(
         pricing.cache_read_per_million_usd is not None
     )
+
+
+def _extract_tiers(entry: dict[str, Any]) -> list[Tier]:
+    """Parse the LiteLLM `tiered_pricing` array into `Tier` dataclasses.
+
+    Each tier is `{range: [start, end], input_cost_per_token, output_cost_per_token}`
+    in the upstream JSON. We turn that into a `Tier` with per-million
+    rates and an explicit `tier_index` (0, 1, 2, ...). Malformed tiers
+    are skipped silently rather than failing the whole entry —
+    consistent with the rest of the loader's defensive parsing.
+
+    Returns an empty list when the entry has no `tiered_pricing` field
+    or all of its tiers are malformed. Flat-rate models — the
+    overwhelming majority — get no tier rows.
+    """
+    tiers = entry.get("tiered_pricing")
+    if not isinstance(tiers, list) or not tiers:
+        return []
+    out: list[Tier] = []
+    for idx, t in enumerate(tiers):
+        if not isinstance(t, dict):
+            continue
+        rng = t.get("range")
+        # LiteLLM emits `[start, end]` with the values either int or
+        # float (e.g. `1000000.0`). Coerce to int; reject if the shape
+        # doesn't match — partial tier data isn't worth keeping.
+        if not isinstance(rng, list) or len(rng) != 2:
+            continue
+        try:
+            start = int(rng[0])
+            end = int(rng[1])
+        except (TypeError, ValueError):
+            continue
+        tier_in = t.get("input_cost_per_token")
+        tier_out = t.get("output_cost_per_token")
+        if not isinstance(tier_in, int | float) or not isinstance(tier_out, int | float):
+            continue
+        out.append(
+            Tier(
+                tier_index=idx,
+                range_start=start,
+                range_end=end,
+                input_per_million_usd=float(tier_in) * _PER_MILLION,
+                output_per_million_usd=float(tier_out) * _PER_MILLION,
+            )
+        )
+    return out
