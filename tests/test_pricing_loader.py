@@ -16,6 +16,7 @@ import pytest
 
 from llm_usage.core import (
     Pricing,
+    Tier,
     load_vendored_pricing,
     parse_litellm_entry,
 )
@@ -175,6 +176,25 @@ def test_tiered_pricing_uses_first_tier_as_base() -> None:
     assert p.output_per_million_usd == pytest.approx(0.40)
 
 
+def test_tiered_pricing_populates_all_tiers_on_pricing_object() -> None:
+    """The flat base rate is tier-0; `pricing.tiers` carries every tier in order."""
+    p = parse_litellm_entry("dashscope/qwen-flash", _QWEN_TIERED_ENTRY)
+    assert p is not None
+    assert len(p.tiers) == 2
+    # Tier 0
+    assert p.tiers[0].tier_index == 0
+    assert p.tiers[0].range_start == 0
+    assert p.tiers[0].range_end == 256_000
+    assert p.tiers[0].input_per_million_usd == pytest.approx(0.05)
+    assert p.tiers[0].output_per_million_usd == pytest.approx(0.40)
+    # Tier 1
+    assert p.tiers[1].tier_index == 1
+    assert p.tiers[1].range_start == 256_000
+    assert p.tiers[1].range_end == 1_000_000
+    assert p.tiers[1].input_per_million_usd == pytest.approx(0.25)
+    assert p.tiers[1].output_per_million_usd == pytest.approx(2.0)
+
+
 def test_flat_rates_win_over_tiered_when_both_present() -> None:
     """If a future LiteLLM entry happens to carry both, the flat rate is the
     canonical 'base' and should be picked. (Defensive — no real example today.)"""
@@ -271,3 +291,126 @@ def test_load_vendored_no_negative_or_nan_rates() -> None:
             assert p.cache_write_per_million_usd >= 0
         if p.cache_read_per_million_usd is not None:
             assert p.cache_read_per_million_usd >= 0
+
+
+# --- tier extraction edge cases --------------------------------------------
+
+
+def test_flat_only_entry_has_empty_tiers() -> None:
+    """No `tiered_pricing` field → `Pricing.tiers` is an empty tuple, not None."""
+    p = parse_litellm_entry("claude-sonnet-4-5", _ANTHROPIC_ENTRY)
+    assert p is not None
+    assert p.tiers == ()
+
+
+def test_tier_with_malformed_range_is_skipped() -> None:
+    """A tier whose `range` isn't a 2-element list is dropped silently.
+
+    Defensive — keeps a single malformed tier from poisoning a model
+    whose other tiers are fine. The model still gets a Pricing as long
+    as the first usable tier (or a flat rate) exists.
+    """
+    entry = {
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "tiered_pricing": [
+            {  # good
+                "input_cost_per_token": 1e-7,
+                "output_cost_per_token": 2e-7,
+                "range": [0, 256000],
+            },
+            {  # bad: range is a string
+                "input_cost_per_token": 5e-7,
+                "output_cost_per_token": 1e-6,
+                "range": "0-256000",
+            },
+            {  # good
+                "input_cost_per_token": 5e-7,
+                "output_cost_per_token": 1e-6,
+                "range": [256000, 1000000],
+            },
+        ],
+    }
+    p = parse_litellm_entry("dashscope/qwen-mixed", entry)
+    assert p is not None
+    # The middle tier was malformed; tier_index preserves source ordering
+    # (0 and 2 — not renumbered to 0 and 1) so the index keys still
+    # match a future re-parse of the same upstream JSON.
+    assert [t.tier_index for t in p.tiers] == [0, 2]
+
+
+def test_tier_with_missing_rate_is_skipped() -> None:
+    """A tier missing input or output cost is dropped."""
+    entry = {
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "tiered_pricing": [
+            {
+                "input_cost_per_token": 1e-7,
+                "output_cost_per_token": 2e-7,
+                "range": [0, 256000],
+            },
+            {
+                # missing input_cost_per_token
+                "output_cost_per_token": 1e-6,
+                "range": [256000, 1000000],
+            },
+        ],
+    }
+    p = parse_litellm_entry("dashscope/qwen-x", entry)
+    assert p is not None
+    assert len(p.tiers) == 1
+    assert p.tiers[0].tier_index == 0
+
+
+def test_tiered_ranges_coerce_float_to_int() -> None:
+    """LiteLLM emits `1000000.0` (float); we store integers."""
+    p = parse_litellm_entry("dashscope/qwen-flash", _QWEN_TIERED_ENTRY)
+    assert p is not None
+    for t in p.tiers:
+        assert isinstance(t.range_start, int)
+        assert isinstance(t.range_end, int)
+
+
+def test_tier_is_a_proper_dataclass() -> None:
+    """Sanity: `Tier` is constructible directly + frozen (hashable)."""
+    t = Tier(
+        tier_index=0,
+        range_start=0,
+        range_end=100,
+        input_per_million_usd=1.0,
+        output_per_million_usd=2.0,
+    )
+    assert t.tier_index == 0
+    # Frozen → hashable, so it can live in sets / dict keys.
+    assert hash(t) == hash(t)
+
+
+def test_load_vendored_populates_tiers_for_qwen_flash() -> None:
+    """End-to-end: the real prices.json has qwen-flash with two tiers."""
+    records = load_vendored_pricing(fetched_at=1)
+    qwen_flash = next(
+        (p for p in records if p.provider == "qwen" and p.model == "qwen-flash"),
+        None,
+    )
+    assert qwen_flash is not None
+    assert len(qwen_flash.tiers) == 2
+    # Tier 0 covers [0, 256k); tier 1 covers [256k, 1M).
+    assert qwen_flash.tiers[0].range_start == 0
+    assert qwen_flash.tiers[0].range_end == 256_000
+    assert qwen_flash.tiers[1].range_start == 256_000
+    assert qwen_flash.tiers[1].range_end == 1_000_000
+
+
+def test_load_vendored_models_either_all_or_no_tiers() -> None:
+    """No record can carry tiers without also carrying a tier-0 flat rate.
+
+    `parse_litellm_entry` writes tier 0's rate into the flat fields as
+    fallback for callers that don't read tiers. So a tiered record must
+    also have non-None flat rates. (Catches a future refactor that
+    accidentally decouples the two.)"""
+    records = load_vendored_pricing(fetched_at=1)
+    for p in records:
+        if p.tiers:
+            assert p.input_per_million_usd > 0
+            assert p.output_per_million_usd > 0

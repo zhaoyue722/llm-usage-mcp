@@ -38,6 +38,7 @@ def test_tables_match_spec(engine: Engine) -> None:
     assert set(inspector.get_table_names()) == {
         "usage_events",
         "pricing_snapshot",
+        "pricing_tier",
         "quality_snapshot",
         "schema_version",
     }

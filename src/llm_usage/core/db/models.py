@@ -94,6 +94,38 @@ class PricingSnapshot(Base):
     fetched_at: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class PricingTier(Base):
+    """One bracket of a model's prompt-size-tiered pricing schedule.
+
+    A model with `tiered_pricing` in the LiteLLM JSON gets one row here
+    per tier; flat-rate models get zero rows. Coexists with the row in
+    `pricing_snapshot` (which stores the tier-0 rate as the flat
+    fallback), so v1 cost code that still reads only the snapshot
+    continues to work — the tier table is read by future cost code
+    that picks a rate based on prompt size.
+
+    Range is `[range_start, range_end)` in prompt tokens. `tier_index`
+    preserves the order LiteLLM emits the tiers in (0, 1, 2, …) so a
+    later lookup-by-prompt-size can short-circuit at the first match.
+
+    No FK to `pricing_snapshot` — same posture as `quality_snapshot`,
+    which is a sibling without FK. SQLite FK enforcement is off by
+    default and the upsert's "delete-then-reinsert per (provider,
+    model)" semantics keep the tables in sync without the constraint.
+    """
+
+    __tablename__ = "pricing_tier"
+
+    provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    model: Mapped[str] = mapped_column(Text, primary_key=True)
+    tier_index: Mapped[int] = mapped_column(Integer, primary_key=True)
+    range_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    range_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_per_million_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    output_per_million_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    fetched_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class QualitySnapshot(Base):
     """Materialized quality score per (provider, model) at fetch time.
 

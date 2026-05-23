@@ -51,6 +51,7 @@ def test_upgrade_creates_spec_tables(upgraded_engine: Engine) -> None:
     assert {
         "usage_events",
         "pricing_snapshot",
+        "pricing_tier",
         "quality_snapshot",
         "schema_version",
     } <= tables
@@ -93,5 +94,6 @@ def test_downgrade_removes_spec_tables(db_path: Path, alembic_config: Config) ->
 
     assert "usage_events" not in tables
     assert "pricing_snapshot" not in tables
+    assert "pricing_tier" not in tables
     assert "quality_snapshot" not in tables
     assert "schema_version" not in tables

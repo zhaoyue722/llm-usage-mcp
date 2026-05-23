@@ -16,13 +16,13 @@ The MCP layer converts to float USD at the API boundary.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from llm_usage.core.db.models import PricingSnapshot
+from llm_usage.core.db.models import PricingSnapshot, PricingTier
 
 # 1 USD = 1e9 nano-USD; rates are per-million-USD, so per-token cost in
 # nano-USD = tokens * rate * (1e9 / 1e6) = tokens * rate * 1_000.
@@ -52,6 +52,41 @@ def nano_to_usd(nano: int) -> float:
 
 
 @dataclass(frozen=True)
+class Tier:
+    """One bracket of a model's prompt-size-tiered pricing schedule.
+
+    Range is `[range_start, range_end)` in prompt tokens. `tier_index`
+    preserves the order LiteLLM emits tiers in (0, 1, 2, …) so a
+    later lookup-by-prompt-size can iterate deterministically. The
+    rates here are per-million-USD, matching `Pricing` — units are
+    converted from per-token at load time in `pricing_loader.py`.
+
+    Dataclass mirror of the `PricingTier` ORM row. Sits inside
+    `Pricing.tiers` for models that carry tiered pricing; the empty
+    tuple for everything else. v1 cost code (PR1's scope) ignores
+    this field — it's persisted by the loader/upsert path so a later
+    slice can switch the cost calculator to pick a tier based on
+    prompt size.
+    """
+
+    tier_index: int
+    range_start: int
+    range_end: int
+    input_per_million_usd: float
+    output_per_million_usd: float
+
+    @classmethod
+    def from_orm(cls, row: PricingTier) -> Tier:
+        return cls(
+            tier_index=row.tier_index,
+            range_start=row.range_start,
+            range_end=row.range_end,
+            input_per_million_usd=row.input_per_million_usd,
+            output_per_million_usd=row.output_per_million_usd,
+        )
+
+
+@dataclass(frozen=True)
 class Pricing:
     """USD-per-million-token rates for one (provider, model).
 
@@ -64,6 +99,13 @@ class Pricing:
     write-side which is absorbed into input). The corresponding token
     column on `usage_events` should be `0` in those cases; if it isn't,
     `CostCalculator` raises rather than silently zeroing the contribution.
+
+    `tiers` is the per-prompt-size pricing schedule for models that
+    carry `tiered_pricing` in LiteLLM's JSON; an empty tuple for the
+    flat-rate majority. The tier-0 rate is *also* written into
+    `input_per_million_usd` / `output_per_million_usd` so cost code
+    that doesn't (yet) know about tiers keeps working — tiers are the
+    additive payload, not a replacement.
     """
 
     provider: str
@@ -73,9 +115,14 @@ class Pricing:
     cache_write_per_million_usd: float | None = None
     cache_read_per_million_usd: float | None = None
     fetched_at: int | None = None
+    tiers: tuple[Tier, ...] = field(default_factory=tuple)
 
     @classmethod
     def from_orm(cls, row: PricingSnapshot) -> Pricing:
+        # Reads only the flat row — `tiers` stays at the default empty
+        # tuple. PR1 doesn't add a read-path for tiers because no
+        # consumer needs them yet; the tier-aware cost calculator
+        # (PR2) will join `pricing_tier` separately.
         return cls(
             provider=row.provider,
             model=row.model,
@@ -179,7 +226,7 @@ def all_pricing(session: Session) -> list[Pricing]:
 
 
 def upsert_pricing(session: Session, pricings: Iterable[Pricing]) -> int:
-    """Idempotently write `Pricing` records into `pricing_snapshot`.
+    """Idempotently write `Pricing` records into `pricing_snapshot` (+ tiers).
 
     Uses SQLite's `INSERT ... ON CONFLICT (provider, model) DO UPDATE` so
     re-running with the same input refreshes `fetched_at` and any changed
@@ -191,9 +238,21 @@ def upsert_pricing(session: Session, pricings: Iterable[Pricing]) -> int:
     surfaces as `ValueError` rather than being silently stamped with
     `now`. Validation runs before the INSERT, so an invalid row in the
     batch aborts the whole call (no partial write).
+
+    Tier handling (snapshot semantics): for every (provider, model) in
+    the batch, existing `pricing_tier` rows are deleted before the new
+    `Pricing.tiers` are inserted. So:
+      - models with tiers in the input get fresh tier rows;
+      - models that had tiers before but don't now lose their old
+        rows (the new snapshot wins);
+      - models with no tiers in either side stay zero-tier.
+    This keeps `pricing_tier` consistent with the snapshot without
+    needing a foreign key (SQLite doesn't enforce FKs by default).
     """
+    pricings_list = list(pricings)
     rows: list[dict[str, object]] = []
-    for p in pricings:
+    tier_rows: list[dict[str, object]] = []
+    for p in pricings_list:
         if p.fetched_at is None:
             raise ValueError(
                 f"Pricing for {p.provider}/{p.model} is missing fetched_at; "
@@ -210,6 +269,19 @@ def upsert_pricing(session: Session, pricings: Iterable[Pricing]) -> int:
                 "fetched_at": p.fetched_at,
             }
         )
+        for tier in p.tiers:
+            tier_rows.append(
+                {
+                    "provider": p.provider,
+                    "model": p.model,
+                    "tier_index": tier.tier_index,
+                    "range_start": tier.range_start,
+                    "range_end": tier.range_end,
+                    "input_per_million_usd": tier.input_per_million_usd,
+                    "output_per_million_usd": tier.output_per_million_usd,
+                    "fetched_at": p.fetched_at,
+                }
+            )
     if not rows:
         return 0
 
@@ -225,4 +297,23 @@ def upsert_pricing(session: Session, pricings: Iterable[Pricing]) -> int:
         },
     )
     session.execute(stmt)
+
+    # Tier-row reconciliation: clear existing tier rows for every
+    # (provider, model) in this batch — even those without new tiers
+    # — so a model that *used to* have tiered_pricing and no longer
+    # does loses its stale rows. Then insert whatever the new batch
+    # carries. One DELETE per upserted key + one INSERT total. For
+    # the ~180-model full refresh this is sub-millisecond; the
+    # alternative (a single tuple_().in_(...) DELETE) trades a
+    # marginally faster path for less-portable SQL.
+    for p in pricings_list:
+        session.execute(
+            delete(PricingTier).where(
+                PricingTier.provider == p.provider,
+                PricingTier.model == p.model,
+            )
+        )
+    if tier_rows:
+        session.execute(sqlite_insert(PricingTier).values(tier_rows))
+
     return len(rows)
