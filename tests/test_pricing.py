@@ -20,6 +20,9 @@ from llm_usage.core import (
     CostCalculator,
     Pricing,
     PricingSnapshot,
+    PricingTier,
+    Tier,
+    all_pricing,
     get_pricing,
     nano_to_usd,
     usd_to_nano,
@@ -357,3 +360,238 @@ def test_round_trip_large_cost() -> None:
     """One million dollars in nano-USD round-trips without loss."""
     nano = 1_000_000 * 1_000_000_000  # $1M
     assert usd_to_nano(nano_to_usd(nano)) == nano
+
+
+# --- tier-aware CostCalculator --------------------------------------------
+#
+# Two-tier qwen-flash shape mirroring what's in the vendored pricing JSON.
+# Tier 0 covers [0, 256k) at $0.05/M in, $0.40/M out; tier 1 covers
+# [256k, 1M) at $0.25/M in, $2.00/M out. Real numbers, real boundaries —
+# tests double as a regression net for the bug that PR2 fixes (always
+# tier-0 pricing for any prompt size).
+
+_QWEN_FLASH_TIERED = Pricing(
+    provider="qwen",
+    model="qwen-flash",
+    # Flat fallback = tier 0's rates, matching the loader's convention.
+    input_per_million_usd=0.05,
+    output_per_million_usd=0.40,
+    fetched_at=1_700_000_000_000,
+    tiers=(
+        Tier(0, 0, 256_000, 0.05, 0.40),
+        Tier(1, 256_000, 1_000_000, 0.25, 2.00),
+    ),
+)
+
+
+def test_calculator_picks_tier_0_below_boundary() -> None:
+    """A 100k-token prompt falls in tier 0 → tier-0 rate applies."""
+    cost = CostCalculator(_QWEN_FLASH_TIERED).cost_nano_usd(input_tokens=100_000, output_tokens=0)
+    # 100_000 input * $0.05/M = $0.005 = 5_000_000 nano
+    assert cost == 5_000_000
+
+
+def test_calculator_picks_tier_1_at_boundary() -> None:
+    """At the boundary (input_tokens == 256_000), tier-1 rate applies.
+
+    LiteLLM's `range` is `[start, end)` — exclusive end. So 256_000
+    tokens belongs to the *next* tier, not the previous one.
+    """
+    cost = CostCalculator(_QWEN_FLASH_TIERED).cost_nano_usd(input_tokens=256_000, output_tokens=0)
+    # 256_000 * $0.25/M = $0.064 = 64_000_000 nano
+    assert cost == 64_000_000
+
+
+def test_calculator_picks_tier_1_above_boundary() -> None:
+    """A 500k-token prompt falls in tier 1 → tier-1 rate applies.
+
+    The bug PR2 fixes: under the PR1 behavior this would have been
+    priced at tier 0's $0.05/M instead of tier 1's $0.25/M — a 5x
+    under-count at the boundary.
+    """
+    cost = CostCalculator(_QWEN_FLASH_TIERED).cost_nano_usd(input_tokens=500_000, output_tokens=200)
+    # 500_000 * $0.25/M + 200 * $2.00/M = $0.125 + $0.0004
+    #   = $0.1254 = 125_400_000 nano
+    assert cost == 125_400_000
+
+
+def test_calculator_above_last_tier_falls_back_to_last_tier() -> None:
+    """A prompt above the highest range_end (rare; usually rejected upstream)
+    uses the last tier's rate — over-estimate rather than under-estimate."""
+    cost = CostCalculator(_QWEN_FLASH_TIERED).cost_nano_usd(input_tokens=1_500_000, output_tokens=0)
+    # 1_500_000 * $0.25/M (tier 1's rate) = $0.375 = 375_000_000 nano
+    assert cost == 375_000_000
+
+
+def test_calculator_zero_input_tokens_falls_in_tier_0() -> None:
+    """input_tokens=0 is the lowest possible value; uses tier 0.
+
+    Edge case: a call with only output tokens (e.g. continuing a
+    cached prompt) should still be priced at tier-0 rates because
+    `input_tokens < tier_0.range_end` (0 < 256_000) holds.
+    """
+    cost = CostCalculator(_QWEN_FLASH_TIERED).cost_nano_usd(input_tokens=0, output_tokens=100)
+    # 100 * $0.40/M (tier 0's output) = $0.00004 = 40_000 nano
+    assert cost == 40_000
+
+
+def test_calculator_flat_rate_pricing_unchanged_by_input_size() -> None:
+    """A Pricing with empty tiers keeps using the snapshot's flat rate
+    regardless of how large the prompt is — no surprise behavior change
+    for the 160+ models that don't carry tiered_pricing."""
+    calc = CostCalculator(ANTHROPIC_PRICING)  # tiers=() by default
+    small = calc.cost_nano_usd(input_tokens=1_000, output_tokens=0)
+    large = calc.cost_nano_usd(input_tokens=500_000, output_tokens=0)
+    # Same per-token rate ($3/M) applied at both sizes.
+    # 1k tokens at $3/M = $3e-3 = 3_000_000 nano (round-numbers).
+    assert small == 3_000_000
+    assert large == 1_500_000_000  # 500k * $3/M = $1.50 = 1.5e9 nano
+
+
+def test_calculator_cache_rates_are_not_tiered() -> None:
+    """`tiered_pricing` brackets only the input + output rates; cache
+    tokens use the flat `cache_*_per_million_usd` on Pricing, regardless
+    of prompt size. This is how LiteLLM encodes it and what Alibaba
+    actually bills."""
+    p = Pricing(
+        provider="qwen",
+        model="qwen-flash-with-cache",
+        input_per_million_usd=0.05,
+        output_per_million_usd=0.40,
+        cache_read_per_million_usd=0.015,  # flat across tiers
+        fetched_at=1,
+        tiers=(
+            Tier(0, 0, 256_000, 0.05, 0.40),
+            Tier(1, 256_000, 1_000_000, 0.25, 2.00),
+        ),
+    )
+    # Tier-1-sized prompt, but the cache_read rate stays $0.015/M.
+    cost = CostCalculator(p).cost_nano_usd(
+        input_tokens=500_000, output_tokens=0, cache_read_tokens=1_000_000
+    )
+    # 500_000 * $0.25/M + 1_000_000 * $0.015/M = $0.125 + $0.015 = $0.14
+    assert cost == 140_000_000
+
+
+# --- tier-aware get_pricing / all_pricing read paths ----------------------
+
+
+def _seed_qwen_flash(session: Session, fetched_at: int = 1_700_000_000_000) -> None:
+    """Direct DB seed: pricing_snapshot + two pricing_tier rows."""
+    session.add(
+        PricingSnapshot(
+            provider="qwen",
+            model="qwen-flash",
+            input_per_million_usd=0.05,
+            output_per_million_usd=0.40,
+            cache_write_per_million_usd=None,
+            cache_read_per_million_usd=None,
+            fetched_at=fetched_at,
+        )
+    )
+    session.add(
+        PricingTier(
+            provider="qwen",
+            model="qwen-flash",
+            tier_index=0,
+            range_start=0,
+            range_end=256_000,
+            input_per_million_usd=0.05,
+            output_per_million_usd=0.40,
+            fetched_at=fetched_at,
+        )
+    )
+    session.add(
+        PricingTier(
+            provider="qwen",
+            model="qwen-flash",
+            tier_index=1,
+            range_start=256_000,
+            range_end=1_000_000,
+            input_per_million_usd=0.25,
+            output_per_million_usd=2.00,
+            fetched_at=fetched_at,
+        )
+    )
+
+
+def test_get_pricing_loads_tiers_in_order(engine: Engine) -> None:
+    """The tier-aware read path returns Pricing.tiers sorted by tier_index."""
+    with Session(engine) as session:
+        _seed_qwen_flash(session)
+        session.commit()
+
+        pricing = get_pricing(session, "qwen", "qwen-flash")
+        assert pricing is not None
+        assert len(pricing.tiers) == 2
+        assert [t.tier_index for t in pricing.tiers] == [0, 1]
+        assert pricing.tiers[0].range_end == 256_000
+        assert pricing.tiers[1].input_per_million_usd == 0.25
+
+
+def test_get_pricing_for_flat_model_has_empty_tiers(engine: Engine) -> None:
+    """A model with no pricing_tier rows reads back tiers=()."""
+    with Session(engine) as session:
+        session.add(
+            PricingSnapshot(
+                provider="anthropic",
+                model="claude-haiku-4-5",
+                input_per_million_usd=1.0,
+                output_per_million_usd=5.0,
+                cache_write_per_million_usd=None,
+                cache_read_per_million_usd=None,
+                fetched_at=1,
+            )
+        )
+        session.commit()
+        pricing = get_pricing(session, "anthropic", "claude-haiku-4-5")
+        assert pricing is not None
+        assert pricing.tiers == ()
+
+
+def test_all_pricing_loads_tiers_for_every_model(engine: Engine) -> None:
+    """`all_pricing` returns every model with tiers populated where applicable.
+
+    Bulk-load path (two queries total, not N+1) — assert it correctly
+    associates each tier row with its parent snapshot.
+    """
+    with Session(engine) as session:
+        _seed_qwen_flash(session)
+        session.add(
+            PricingSnapshot(
+                provider="anthropic",
+                model="claude-haiku-4-5",
+                input_per_million_usd=1.0,
+                output_per_million_usd=5.0,
+                cache_write_per_million_usd=None,
+                cache_read_per_million_usd=None,
+                fetched_at=1,
+            )
+        )
+        session.commit()
+
+        all_p = all_pricing(session)
+        by_key = {(p.provider, p.model): p for p in all_p}
+        assert len(by_key[("qwen", "qwen-flash")].tiers) == 2
+        assert by_key[("anthropic", "claude-haiku-4-5")].tiers == ()
+
+
+def test_calculator_end_to_end_through_get_pricing_picks_correct_tier(
+    engine: Engine,
+) -> None:
+    """Full flow: DB → get_pricing → CostCalculator → cost.
+
+    This is the bug-fix integration test: a 500k-input qwen-flash call
+    must record at tier 1's $0.25/M, not tier 0's $0.05/M.
+    """
+    with Session(engine) as session:
+        _seed_qwen_flash(session)
+        session.commit()
+
+        pricing = get_pricing(session, "qwen", "qwen-flash")
+        assert pricing is not None
+        cost = CostCalculator(pricing).cost_nano_usd(input_tokens=500_000, output_tokens=0)
+        # PR2 contract: 500k * tier-1 rate = 500_000 * $0.25/M = $0.125
+        # = 125_000_000 nano. Under PR1's behavior this would have been
+        # 500_000 * $0.05/M = $0.025 = 25_000_000 nano (5x under).
+        assert cost == 125_000_000
