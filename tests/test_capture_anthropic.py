@@ -13,28 +13,27 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 from llm_usage.capture._anthropic_common import build_upstream_headers
 from llm_usage.capture.anthropic import (
     _response_to_event_args,
     _safe_parse_json,
 )
-from llm_usage.config import Settings
 
 _FIXTURE_DIR = Path(__file__).parent / "fixtures" / "sample_responses"
 
 
 @pytest.fixture
-def settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
-    """A `Settings` with a known Anthropic key, no `.env` interference."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-real-server")
-    return Settings()
+def key() -> SecretStr:
+    """A `SecretStr` matching what `Settings.api_key_for("anthropic")` returns."""
+    return SecretStr("sk-real-server")
 
 
 # --- build_upstream_headers ----------------------------------------------
 
 
-def test_build_upstream_headers_sets_server_side_key_only(settings: Settings) -> None:
+def test_build_upstream_headers_sets_server_side_key_only(key: SecretStr) -> None:
     """Client-provided x-api-key / Authorization must NOT survive the rewrite."""
     headers = build_upstream_headers(
         {
@@ -42,7 +41,7 @@ def test_build_upstream_headers_sets_server_side_key_only(settings: Settings) ->
             "authorization": "Bearer client-junk",
             "user-agent": "MyAgent/1.0",
         },
-        settings,
+        key,
     )
     assert headers["x-api-key"] == "sk-real-server"
     # Nothing client-side leaks through — whitelist semantics.
@@ -50,32 +49,32 @@ def test_build_upstream_headers_sets_server_side_key_only(settings: Settings) ->
     assert "user-agent" not in {k.lower() for k in headers}
 
 
-def test_build_upstream_headers_forwards_anthropic_version_when_set(settings: Settings) -> None:
-    headers = build_upstream_headers({"anthropic-version": "2024-10-22"}, settings)
+def test_build_upstream_headers_forwards_anthropic_version_when_set(key: SecretStr) -> None:
+    headers = build_upstream_headers({"anthropic-version": "2024-10-22"}, key)
     assert headers["anthropic-version"] == "2024-10-22"
 
 
-def test_build_upstream_headers_injects_default_anthropic_version(settings: Settings) -> None:
+def test_build_upstream_headers_injects_default_anthropic_version(key: SecretStr) -> None:
     """No client-supplied version -> default to the documented stable value."""
-    headers = build_upstream_headers({}, settings)
+    headers = build_upstream_headers({}, key)
     assert headers["anthropic-version"] == "2023-06-01"
 
 
-def test_build_upstream_headers_passes_anthropic_beta_through(settings: Settings) -> None:
+def test_build_upstream_headers_passes_anthropic_beta_through(key: SecretStr) -> None:
     headers = build_upstream_headers(
         {"anthropic-beta": "prompt-caching-2024-07-31,tools-2024-04-04"},
-        settings,
+        key,
     )
     assert headers["anthropic-beta"] == "prompt-caching-2024-07-31,tools-2024-04-04"
 
 
-def test_build_upstream_headers_omits_beta_when_absent(settings: Settings) -> None:
-    headers = build_upstream_headers({}, settings)
+def test_build_upstream_headers_omits_beta_when_absent(key: SecretStr) -> None:
+    headers = build_upstream_headers({}, key)
     assert "anthropic-beta" not in headers
 
 
-def test_build_upstream_headers_always_sets_content_type_json(settings: Settings) -> None:
-    headers = build_upstream_headers({"content-type": "text/plain"}, settings)
+def test_build_upstream_headers_always_sets_content_type_json(key: SecretStr) -> None:
+    headers = build_upstream_headers({"content-type": "text/plain"}, key)
     assert headers["content-type"] == "application/json"
 
 

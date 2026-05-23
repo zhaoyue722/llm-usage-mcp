@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 import httpx
 from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
+from pydantic import SecretStr
 
 from llm_usage.capture._anthropic_common import build_upstream_headers
 from llm_usage.capture._streaming_common import (
@@ -179,13 +180,19 @@ class SSELineParser:
 # --- HTTP handler -----------------------------------------------------------
 
 
-async def handle_streaming(request: Request, settings: Settings, body: bytes) -> Response:
+async def handle_streaming(
+    request: Request,
+    settings: Settings,
+    body: bytes,
+    key: SecretStr,
+) -> Response:
     """Top-level orchestrator for one `stream: true` `/v1/messages` call.
 
     Caller (`anthropic.py:_handle_messages`) is responsible for the
-    JSON pre-flight that decides streaming vs non-streaming. By the
-    time we get here, `body` has already been read once and we know
-    `stream: true` is in it.
+    JSON pre-flight that decides streaming vs non-streaming AND for
+    the missing-key 503 check. By the time we get here, `body` has
+    been read, `stream: true` is in it, and `key` has been resolved
+    non-None.
 
     Strategy: open the upstream as a streaming response, peek at the
     status code, then split:
@@ -198,7 +205,7 @@ async def handle_streaming(request: Request, settings: Settings, body: bytes) ->
         cancellation.
     """
     url = f"{settings.anthropic_base_url.rstrip('/')}/v1/messages"
-    headers = build_upstream_headers(request.headers, settings)
+    headers = build_upstream_headers(request.headers, key)
 
     client: httpx.AsyncClient = request.app.state.http_client
     upstream_request = client.build_request(
