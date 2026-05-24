@@ -118,11 +118,20 @@ class Pricing:
     tiers: tuple[Tier, ...] = field(default_factory=tuple)
 
     @classmethod
-    def from_orm(cls, row: PricingSnapshot) -> Pricing:
-        # Reads only the flat row — `tiers` stays at the default empty
-        # tuple. PR1 doesn't add a read-path for tiers because no
-        # consumer needs them yet; the tier-aware cost calculator
-        # (PR2) will join `pricing_tier` separately.
+    def from_orm(
+        cls,
+        row: PricingSnapshot,
+        tier_rows: Iterable[PricingTier] = (),
+    ) -> Pricing:
+        """Construct a `Pricing` from its `pricing_snapshot` row and any tiers.
+
+        `tier_rows` is optional and defaults to empty — callers reading
+        the snapshot only (e.g. tests that don't care about per-tier
+        cost) keep the same `from_orm(row)` shape that PR1 introduced.
+        The tier-aware read path (`get_pricing`, `all_pricing`) passes
+        the matching `pricing_tier` rows in, sorted by `tier_index`,
+        so `Pricing.tiers` reflects the on-disk schedule.
+        """
         return cls(
             provider=row.provider,
             model=row.model,
@@ -131,6 +140,7 @@ class Pricing:
             cache_write_per_million_usd=row.cache_write_per_million_usd,
             cache_read_per_million_usd=row.cache_read_per_million_usd,
             fetched_at=row.fetched_at,
+            tiers=tuple(Tier.from_orm(t) for t in tier_rows),
         )
 
 
@@ -142,6 +152,14 @@ class CostCalculator:
     here is the validation: cache tokens with a missing rate raise
     `ValueError` (instead of silently rounding to zero), and negative
     token counts raise.
+
+    Tier-aware: when `pricing.tiers` is non-empty (e.g. qwen-flash's
+    `[0, 256k)` and `[256k, 1M)` brackets), input + output rates are
+    picked by which tier the call's `input_tokens` falls into. Models
+    with empty `pricing.tiers` (the flat-rate majority) keep using the
+    snapshot's flat `input_per_million_usd` / `output_per_million_usd`
+    — no behavior change for them. Cache tokens are *not* tiered in
+    any pricing schedule we've seen; their rates stay flat.
     """
 
     def __init__(self, pricing: Pricing) -> None:
@@ -168,9 +186,10 @@ class CostCalculator:
             if value < 0:
                 raise ValueError(f"{name} must be non-negative, got {value}")
 
+        input_rate, output_rate = self._rates_for(input_tokens)
         cost_micro = (
-            input_tokens * self._pricing.input_per_million_usd
-            + output_tokens * self._pricing.output_per_million_usd
+            input_tokens * input_rate
+            + output_tokens * output_rate
             + self._cache_contribution(
                 cache_write_tokens,
                 self._pricing.cache_write_per_million_usd,
@@ -187,6 +206,36 @@ class CostCalculator:
         # per-million-USD rate into per-token nano-USD. round() banker-
         # rounds, which is the standard for money.
         return round(cost_micro * _NANO_PER_MILLION_USD)
+
+    def _rates_for(self, input_tokens: int) -> tuple[float, float]:
+        """Pick the (input, output) per-million rate for this prompt size.
+
+        Walks `pricing.tiers` in order and returns the first tier whose
+        `range_end` is greater than `input_tokens` — implicitly using
+        the lower bound from the prior tier's `range_end` (LiteLLM's
+        `tiered_pricing` brackets are contiguous starting from 0, so
+        explicit `range_start` checking is redundant). Above the
+        highest tier — which in practice means the prompt exceeds the
+        model's max input — fall back to the last tier's rate as the
+        conservative choice.
+
+        Flat-rate models (empty `pricing.tiers`) return the snapshot's
+        flat rates verbatim; behavior unchanged from PR1.
+        """
+        if not self._pricing.tiers:
+            return (
+                self._pricing.input_per_million_usd,
+                self._pricing.output_per_million_usd,
+            )
+        for tier in self._pricing.tiers:
+            if input_tokens < tier.range_end:
+                return tier.input_per_million_usd, tier.output_per_million_usd
+        # Above all known tiers (rare; usually means the provider would
+        # have refused the request). Last tier is the most expensive;
+        # using it keeps the cost an over-estimate rather than an
+        # under-estimate — better defensive default for billing.
+        last = self._pricing.tiers[-1]
+        return last.input_per_million_usd, last.output_per_million_usd
 
     def _cache_contribution(self, tokens: int, rate: float | None, label: str) -> float:
         if tokens == 0:
@@ -206,11 +255,23 @@ def get_pricing(session: Session, provider: str, model: str) -> Pricing | None:
     Returns `None` if the model isn't in the table — the MCP layer's
     `record_usage` tool surfaces this as a `warning` and stores cost = 0
     rather than failing the recording.
+
+    Two queries: one for the flat snapshot row, one for any
+    `pricing_tier` rows that model has. The second query returns
+    nothing for the flat-rate majority — the extra round-trip is
+    sub-millisecond on local SQLite and the alternative (a single
+    LEFT JOIN producing per-tier flat-row duplicates) would be
+    harder to reassemble.
     """
     row = session.get(PricingSnapshot, (provider, model))
     if row is None:
         return None
-    return Pricing.from_orm(row)
+    tier_rows = session.scalars(
+        select(PricingTier)
+        .where(PricingTier.provider == provider, PricingTier.model == model)
+        .order_by(PricingTier.tier_index)
+    ).all()
+    return Pricing.from_orm(row, tier_rows)
 
 
 def all_pricing(session: Session) -> list[Pricing]:
@@ -220,9 +281,24 @@ def all_pricing(session: Session) -> list[Pricing]:
     (provider, model) so cost-projection callers (`compare_providers`,
     later `recommend_provider`) get deterministic tie-breaking when two
     models project to the same cost.
+
+    Two queries — one for the snapshots, one for *all* tier rows —
+    then merged in Python by (provider, model). Avoids the N+1 query
+    that would result from looking up tiers per row.
     """
-    stmt = select(PricingSnapshot).order_by(PricingSnapshot.provider, PricingSnapshot.model)
-    return [Pricing.from_orm(row) for row in session.scalars(stmt).all()]
+    snap_stmt = select(PricingSnapshot).order_by(PricingSnapshot.provider, PricingSnapshot.model)
+    snap_rows = list(session.scalars(snap_stmt).all())
+
+    tier_stmt = select(PricingTier).order_by(
+        PricingTier.provider, PricingTier.model, PricingTier.tier_index
+    )
+    tiers_by_key: dict[tuple[str, str], list[PricingTier]] = {}
+    for t in session.scalars(tier_stmt).all():
+        tiers_by_key.setdefault((t.provider, t.model), []).append(t)
+
+    return [
+        Pricing.from_orm(row, tiers_by_key.get((row.provider, row.model), [])) for row in snap_rows
+    ]
 
 
 def upsert_pricing(session: Session, pricings: Iterable[Pricing]) -> int:

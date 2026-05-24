@@ -26,7 +26,7 @@ import llm_usage.mcp.server as server_module
 from llm_usage.bootstrap import migrate_to_head
 from llm_usage.core.db.models import UsageEvent
 from llm_usage.core.db.session import get_session
-from llm_usage.core.pricing import Pricing, nano_to_usd, upsert_pricing
+from llm_usage.core.pricing import Pricing, Tier, nano_to_usd, upsert_pricing
 from llm_usage.core.recording import record_event
 
 # A controlled pricing row with round numbers so cost math is exact:
@@ -438,3 +438,114 @@ def test_record_usage_tool_idempotent_on_request_id(priced_db: Path) -> None:
     assert second.warning == "request_id already recorded; returning the existing event"
     # One row, despite two tool calls.
     assert len(json.loads(server_module.recent_events())) == 1
+
+
+# --- tier-aware recording -------------------------------------------------
+#
+# Tiered pricing is set up by the loader via `upsert_pricing` (which
+# also writes `pricing_tier` rows). The recorder reads via `get_pricing`
+# (which loads tiers) and passes the resulting `Pricing` to
+# `CostCalculator`, which now picks the right tier by `input_tokens`.
+# These tests pin the end-to-end contract: same model, two prompt sizes
+# in different tiers, two different recorded costs.
+
+_QWEN_TIERED = Pricing(
+    provider="qwen",
+    model="qwen-flash-test",
+    # Flat fallback = tier 0's rates per the loader's convention.
+    input_per_million_usd=0.05,
+    output_per_million_usd=0.40,
+    fetched_at=1_700_000_000_000,
+    tiers=(
+        Tier(0, 0, 256_000, 0.05, 0.40),
+        Tier(1, 256_000, 1_000_000, 0.25, 2.00),
+    ),
+)
+
+
+@pytest.fixture
+def tiered_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Fresh DB with the qwen-flash-shaped tiered pricing row."""
+    db = tmp_path / "usage.db"
+    monkeypatch.setenv("LLM_USAGE_DB_URL", f"sqlite:///{db}")
+    migrate_to_head()
+    with get_session() as session:
+        upsert_pricing(session, [_QWEN_TIERED])
+        session.commit()
+    return db
+
+
+def test_record_event_picks_tier_0_for_small_prompt(tiered_db: Path) -> None:
+    """A 100k-input call falls in tier 0 → tier-0 rate at insert."""
+    with get_session() as session:
+        recorded = record_event(
+            session,
+            provider="qwen",
+            model="qwen-flash-test",
+            input_tokens=100_000,
+            output_tokens=0,
+        )
+        session.commit()
+    # 100k * $0.05/M = $0.005 = 5_000_000 nano.
+    assert recorded.cost_nano_usd == 5_000_000
+
+
+def test_record_event_picks_tier_1_for_large_prompt(tiered_db: Path) -> None:
+    """A 500k-input call falls in tier 1 → tier-1 rate at insert.
+
+    This is the bug PR2 fixes. Under PR1's behavior this same call
+    would have recorded at tier 0's $0.05/M ($0.025 = 25_000_000
+    nano), a 5x under-count.
+    """
+    with get_session() as session:
+        recorded = record_event(
+            session,
+            provider="qwen",
+            model="qwen-flash-test",
+            input_tokens=500_000,
+            output_tokens=0,
+        )
+        session.commit()
+    # 500k * $0.25/M = $0.125 = 125_000_000 nano. Five times what
+    # PR1's flat-only path would have produced.
+    assert recorded.cost_nano_usd == 125_000_000
+
+
+def test_record_event_same_model_two_sizes_get_two_costs(tiered_db: Path) -> None:
+    """Two calls to the same model at different prompt sizes get
+    different costs — proves the tier pick is per-call, not per-model."""
+    with get_session() as session:
+        small = record_event(
+            session,
+            provider="qwen",
+            model="qwen-flash-test",
+            input_tokens=10_000,
+            output_tokens=0,
+        )
+        large = record_event(
+            session,
+            provider="qwen",
+            model="qwen-flash-test",
+            input_tokens=500_000,
+            output_tokens=0,
+        )
+        session.commit()
+    # 10k * $0.05/M = $5e-4 = 500_000 nano.
+    assert small.cost_nano_usd == 500_000
+    assert large.cost_nano_usd == 125_000_000  # 500k * $0.25/M
+
+
+def test_record_event_at_tier_boundary_uses_higher_tier(tiered_db: Path) -> None:
+    """At input_tokens=256_000 exactly, the recorder uses tier 1 (the
+    half-open `[start, end)` convention)."""
+    with get_session() as session:
+        recorded = record_event(
+            session,
+            provider="qwen",
+            model="qwen-flash-test",
+            input_tokens=256_000,
+            output_tokens=0,
+        )
+        session.commit()
+    # 256k * $0.25/M (tier 1) = $0.064 = 64_000_000 nano.
+    assert recorded.cost_nano_usd == 64_000_000
