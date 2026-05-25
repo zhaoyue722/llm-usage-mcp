@@ -31,6 +31,20 @@ Conversions applied:
   collide on `(provider, model)`. We prefer whichever entry has more
   cache rates populated — the namespaced form is usually the more
   current/complete record.
+
+**Overrides.** `pricing_data/pricing_overrides.json` is a small,
+manually-maintained sibling that gets field-merged on top of
+`prices.json` before parsing. Use cases: a model LiteLLM hasn't
+catalogued yet (`deepseek-v4-flash` today), or a region whose rate
+card differs from LiteLLM's tracked schedule. The merge is
+field-level — an override entry that only sets `input_cost_per_token`
+leaves the rest of the base entry intact. New keys add new models;
+matching keys merge over the base. The file is JSON (no comments
+allowed); the override schema is the same LiteLLM shape `prices.json`
+uses. See `pricing_data/README.md` for the rules of thumb (overrides
+should be sparing; prefer upstreaming a fix to LiteLLM when
+possible). Survives the weekly refresh because the refresh script
+only touches `prices.json`.
 """
 
 from __future__ import annotations
@@ -38,7 +52,7 @@ from __future__ import annotations
 import json
 import time
 from importlib.resources import files
-from typing import Any
+from typing import Any, cast
 
 from llm_usage.core.pricing import Pricing, Tier
 
@@ -57,14 +71,64 @@ _PER_MILLION = 1_000_000
 
 
 def load_vendored_pricing(*, fetched_at: int | None = None) -> list[Pricing]:
-    """Load the bundled `prices.json` and return one `Pricing` per (provider, model).
+    """Load the bundled `prices.json` (+ optional overrides) and return one
+    `Pricing` per (provider, model).
 
     `fetched_at` is the millisecond epoch stamped onto every record;
     defaults to "now". Pass an explicit value in tests for determinism.
+
+    `pricing_overrides.json` is loaded and field-merged on top of
+    `prices.json` before parsing — see this module's docstring for the
+    merge rules.
     """
-    text = files("llm_usage.core.pricing_data").joinpath("prices.json").read_text()
-    data: dict[str, dict[str, Any]] = json.loads(text)
+    base_text = files("llm_usage.core.pricing_data").joinpath("prices.json").read_text()
+    base: dict[str, dict[str, Any]] = json.loads(base_text)
+    overrides = _load_overrides()
+    data = _merge_overrides(base, overrides)
     return _convert_all(data, fetched_at=fetched_at)
+
+
+def _load_overrides() -> dict[str, dict[str, Any]]:
+    """Read `pricing_overrides.json` if present; return an empty dict otherwise.
+
+    Most users won't have overrides — the absent-file path is normal.
+    A *malformed* override file is the user's mistake and surfaces as
+    `json.JSONDecodeError` (we don't catch it): hard-failing at boot
+    is louder and easier to debug than a silently-ignored file that
+    leaves recorded costs subtly wrong.
+    """
+    resource = files("llm_usage.core.pricing_data").joinpath("pricing_overrides.json")
+    if not resource.is_file():
+        return {}
+    text = resource.read_text()
+    if not text.strip():
+        return {}
+    # The override schema mirrors LiteLLM's, which is `dict[str, dict[str, Any]]`.
+    # Trust the JSON shape — the `parse_litellm_entry` defensive checks
+    # catch any per-entry malformedness downstream.
+    return cast(dict[str, dict[str, Any]], json.loads(text))
+
+
+def _merge_overrides(
+    base: dict[str, dict[str, Any]],
+    overrides: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Field-level merge: override fields win, untouched base fields stay.
+
+    For a key present in both, the result is `{**base[key], **override[key]}`
+    — so an override that only specifies one field (e.g.
+    `{"deepseek-chat": {"input_cost_per_token": 1e-7}}`) doesn't
+    accidentally drop the rest of the base entry. For a key only in
+    overrides, the override entry is added as-is (used for models
+    LiteLLM hasn't catalogued yet). For a key only in base, no change.
+
+    Returns a new dict; neither argument is mutated.
+    """
+    merged: dict[str, dict[str, Any]] = dict(base)
+    for key, override_entry in overrides.items():
+        existing = merged.get(key, {})
+        merged[key] = {**existing, **override_entry}
+    return merged
 
 
 def _convert_all(

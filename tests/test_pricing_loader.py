@@ -414,3 +414,98 @@ def test_load_vendored_models_either_all_or_no_tiers() -> None:
         if p.tiers:
             assert p.input_per_million_usd > 0
             assert p.output_per_million_usd > 0
+
+
+# --- pricing_overrides.json merge ------------------------------------------
+
+
+def test_merge_overrides_adds_new_key() -> None:
+    """A key only in overrides shows up as a new entry."""
+    from llm_usage.core.pricing_loader import _merge_overrides
+
+    base = {"foo": {"litellm_provider": "anthropic", "input_cost_per_token": 1e-6}}
+    overrides = {"bar": {"litellm_provider": "openai", "input_cost_per_token": 2e-6}}
+    merged = _merge_overrides(base, overrides)
+    assert merged == {
+        "foo": {"litellm_provider": "anthropic", "input_cost_per_token": 1e-6},
+        "bar": {"litellm_provider": "openai", "input_cost_per_token": 2e-6},
+    }
+
+
+def test_merge_overrides_field_level_merge_preserves_base_fields() -> None:
+    """An override that touches one field leaves the base entry's other
+    fields intact — the load-bearing property that lets a user write a
+    minimal override without having to repeat every field."""
+    from llm_usage.core.pricing_loader import _merge_overrides
+
+    base = {
+        "foo": {
+            "litellm_provider": "deepseek",
+            "input_cost_per_token": 2.8e-7,
+            "output_cost_per_token": 4.2e-7,
+            "cache_read_input_token_cost": 2.8e-8,
+        }
+    }
+    overrides = {"foo": {"input_cost_per_token": 1e-7}}
+    merged = _merge_overrides(base, overrides)
+    # Only input_cost_per_token changed; output + cache_read survived.
+    assert merged["foo"]["input_cost_per_token"] == 1e-7
+    assert merged["foo"]["output_cost_per_token"] == 4.2e-7
+    assert merged["foo"]["cache_read_input_token_cost"] == 2.8e-8
+    assert merged["foo"]["litellm_provider"] == "deepseek"
+
+
+def test_merge_overrides_empty_overrides_returns_base_unchanged() -> None:
+    """No overrides → result equals base (the most common path)."""
+    from llm_usage.core.pricing_loader import _merge_overrides
+
+    base = {"foo": {"litellm_provider": "anthropic", "input_cost_per_token": 1e-6}}
+    assert _merge_overrides(base, {}) == base
+
+
+def test_merge_overrides_does_not_mutate_inputs() -> None:
+    """The merge returns a new dict — callers can keep references to the
+    originals."""
+    from llm_usage.core.pricing_loader import _merge_overrides
+
+    base = {"foo": {"input_cost_per_token": 1e-6}}
+    overrides = {"foo": {"input_cost_per_token": 2e-6}}
+    base_snapshot = {k: dict(v) for k, v in base.items()}
+    overrides_snapshot = {k: dict(v) for k, v in overrides.items()}
+    _merge_overrides(base, overrides)
+    assert base == base_snapshot
+    assert overrides == overrides_snapshot
+
+
+def test_load_vendored_includes_overrides_for_deepseek_v4_flash() -> None:
+    """End-to-end: the override file's deepseek-v4-flash entry shows up
+    as a real Pricing after `load_vendored_pricing`."""
+    records = load_vendored_pricing(fetched_at=1)
+    v4_flash = next(
+        (p for p in records if p.provider == "deepseek" and p.model == "deepseek-v4-flash"),
+        None,
+    )
+    assert v4_flash is not None
+    # Source: api-docs.deepseek.com (2026-05-25).
+    # Input $0.14/M = 1.4e-7 USD/token; output $0.28/M = 2.8e-7 USD/token.
+    assert v4_flash.input_per_million_usd == pytest.approx(0.14)
+    assert v4_flash.output_per_million_usd == pytest.approx(0.28)
+    # Cache hit $0.0028/M; cache creation is $0 (DeepSeek bills writes
+    # at the regular input rate, no separate creation line item).
+    assert v4_flash.cache_read_per_million_usd == pytest.approx(0.0028)
+    assert v4_flash.cache_write_per_million_usd == 0.0
+
+
+def test_load_vendored_includes_overrides_for_deepseek_v4_pro() -> None:
+    """The v4-pro entry uses post-promo (steady-state) rates."""
+    records = load_vendored_pricing(fetched_at=1)
+    v4_pro = next(
+        (p for p in records if p.provider == "deepseek" and p.model == "deepseek-v4-pro"),
+        None,
+    )
+    assert v4_pro is not None
+    # Post-promo rates (the 75%-off promo ends 2026-05-31).
+    # Input $1.74/M = 1.74e-6 USD/token; output $3.48/M = 3.48e-6 USD/token.
+    assert v4_pro.input_per_million_usd == pytest.approx(1.74)
+    assert v4_pro.output_per_million_usd == pytest.approx(3.48)
+    assert v4_pro.cache_read_per_million_usd == pytest.approx(0.0145)
