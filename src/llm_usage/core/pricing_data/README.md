@@ -70,3 +70,38 @@ price / model changes, never an ordering reshuffle.
 ## Why vendor LiteLLM's shape verbatim instead of converting
 
 Refresh stays a one-liner: download → filter → commit. Any conversion to our `pricing_snapshot` shape happens once at load time in the (forthcoming) loader; the committed JSON stays compatible with anyone else who parses LiteLLM data.
+
+## Overrides — `pricing_overrides.json`
+
+`pricing_overrides.json` is a small, manually-maintained sibling of `prices.json` for models / rates LiteLLM is missing or wrong about. The loader **field-merges** it on top of the LiteLLM snapshot before parsing:
+
+- A key only in `pricing_overrides.json` → **adds a new model** (use case: a model LiteLLM hasn't catalogued yet, like `deepseek-v4-flash` was on 2026-05-25).
+- A key present in both → **field-level merge**, override fields win. An override that only sets `input_cost_per_token` leaves every other field (`output_cost_per_token`, `cache_read_input_token_cost`, `litellm_provider`, `mode`, …) from the base entry intact.
+- A key only in `prices.json` → **unchanged** (the normal path for the ~177 LiteLLM-tracked models).
+
+The merge happens in `pricing_loader._merge_overrides`. Schema mirrors LiteLLM's exactly — same field names, same per-token units. JSON only (no comments allowed).
+
+### When to add an override
+
+Sparing. Three legitimate cases:
+
+1. **LiteLLM catalog lag.** A provider ships a new model (or aliases an old name to a new backend) before LiteLLM catalogues it. Symptom: a real call records `cost_nano_usd = 0` with a "model not in pricing table" warning. Today's example: `deepseek-v4-flash` — the model `deepseek-chat` auto-routes to.
+2. **Regional rate divergence.** LiteLLM tracks one schedule per model (typically International / English-docs prices). If you operate in a different region — China-mainland Bailian rates for Qwen, for instance — your real bill diverges from what we record. An override pins the rates that match your bill.
+3. **Pricing data quality issues.** Rare. LiteLLM is usually right, but if a rate is demonstrably wrong, an override patches it locally while you upstream the fix.
+
+### When NOT to add an override
+
+- **As a general pricing source.** `prices.json` is auto-refreshed weekly from LiteLLM; overrides are *not*. An entry you copy in today and forget will go stale when the provider next changes their rates.
+- **For a model already in `prices.json`.** Trust LiteLLM unless you have evidence they're wrong.
+- **Before trying to upstream.** If LiteLLM is missing a model, file an issue / PR at https://github.com/BerriAI/litellm/issues — fixes there benefit everyone. Use an override only as the local stopgap until the upstream fix lands.
+
+### How to add one
+
+1. Look up the model's current rates on the provider's pricing page. Use their **per-token** (USD) numbers — same shape as LiteLLM.
+2. Add an entry keyed by `<provider>/<model>` (or just `<model>`, both work; the loader strips the prefix).
+3. Include at minimum: `litellm_provider`, `mode`, `input_cost_per_token`, `output_cost_per_token`. Cache fields if applicable. A `source` URL — your future self will thank you when checking what's stale.
+4. Run the test suite. The override should round-trip through `load_vendored_pricing` cleanly and the new model should be queryable via `get_pricing`.
+
+### Survives the weekly refresh
+
+`scripts/refresh_pricing.sh` only writes `prices.json`. `pricing_overrides.json` is untouched on refresh — that's the whole point of keeping the two files separate.
