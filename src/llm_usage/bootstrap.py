@@ -1,4 +1,4 @@
-"""First-run schema migration and pricing materialization.
+"""Schema migration and pricing materialization on every server boot.
 
 `main()` invokes `bootstrap()` before starting the MCP server. The two
 steps are exposed separately so tests (and future tooling like an
@@ -11,11 +11,15 @@ steps are exposed separately so tests (and future tooling like an
   checkout, which is the v1 distribution model. Packaging the
   migrations as package data is a follow-up for PyPI publishing
   (Day 12-13 in the action plan).
-- `materialize_pricing_if_empty()` checks the `pricing_snapshot` row
-  count; on a fresh DB it loads the vendored LiteLLM JSON via
-  `load_vendored_pricing()` and idempotently upserts. On subsequent
-  boots the table is non-empty and the call is a no-op. Returns the
-  number of rows materialized so the caller can log it.
+- `materialize_pricing()` loads the vendored LiteLLM JSON (merged with
+  `pricing_overrides.json`) via `load_vendored_pricing()` and upserts
+  every entry on every boot. The upsert is idempotent by
+  `(provider, model)`, so re-running over an already-populated table
+  is safe and fast (~200 rows). Running unconditionally is what makes
+  edits to `pricing_overrides.json` actually reach `pricing_snapshot`
+  on the next restart — an earlier "first-run only" guard silently
+  ignored override edits once the table had any rows. Returns the
+  number of rows written so the caller can log it.
 """
 
 from __future__ import annotations
@@ -25,11 +29,9 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import func, select
 from sqlalchemy.engine.url import make_url
 
 from llm_usage.config import get_settings
-from llm_usage.core.db.models import PricingSnapshot
 from llm_usage.core.db.session import get_session
 from llm_usage.core.pricing import upsert_pricing
 from llm_usage.core.pricing_loader import load_vendored_pricing
@@ -88,25 +90,26 @@ def _ensure_sqlite_parent_dir(url: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
 
-def materialize_pricing_if_empty() -> int:
-    """Populate `pricing_snapshot` from the vendored JSON on a fresh DB.
+def materialize_pricing() -> int:
+    """Upsert the vendored pricing JSON into `pricing_snapshot` unconditionally.
 
-    Returns the number of rows written. A return value of `0` means the
-    table was already populated (the table is the source of truth once
-    seeded; weekly refresh is a separate, post-v1 concern).
+    Runs on every server boot. The upsert is idempotent by
+    `(provider, model)`, so on a stable rate card subsequent boots
+    write the same rows back; on a *changed* rate card (LiteLLM
+    refresh or a `pricing_overrides.json` edit), the diff propagates
+    on the next restart.
+
+    Returns the number of rows written.
     """
+    pricings = load_vendored_pricing()
     with get_session() as session:
-        existing = session.scalar(select(func.count()).select_from(PricingSnapshot)) or 0
-        if existing > 0:
-            return 0
-        pricings = load_vendored_pricing()
         written = upsert_pricing(session, pricings)
         session.commit()
         return written
 
 
 def bootstrap() -> None:
-    """Bring the DB up to head schema and seed pricing if empty.
+    """Bring the DB up to head schema and refresh pricing.
 
     The `quality_snapshot` table is created by the migration but left
     empty in v1 — `recommend_provider` ranks by cost only. A future
@@ -114,6 +117,5 @@ def bootstrap() -> None:
     here; the table is already in place to receive it.
     """
     migrate_to_head()
-    pricing_rows = materialize_pricing_if_empty()
-    if pricing_rows:
-        logger.info("materialized %d pricing rows from vendored JSON", pricing_rows)
+    pricing_rows = materialize_pricing()
+    logger.info("materialized %d pricing rows from vendored JSON", pricing_rows)

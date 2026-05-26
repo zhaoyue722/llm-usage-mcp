@@ -15,7 +15,7 @@ from sqlalchemy import func, inspect, select
 from llm_usage.bootstrap import (
     _find_alembic_root,
     bootstrap,
-    materialize_pricing_if_empty,
+    materialize_pricing,
     migrate_to_head,
 )
 from llm_usage.core.db.models import PricingSnapshot, QualitySnapshot
@@ -56,24 +56,46 @@ def test_migrate_to_head_is_idempotent(db_url: str) -> None:
 
 def test_materialize_pricing_populates_empty_table(db_url: str) -> None:
     migrate_to_head()
-    written = materialize_pricing_if_empty()
+    written = materialize_pricing()
     assert written > 0
     with get_session() as session:
         row_count = session.scalar(select(func.count()).select_from(PricingSnapshot))
     assert row_count == written
 
 
-def test_materialize_pricing_is_noop_when_already_populated(db_url: str) -> None:
+def test_materialize_pricing_refreshes_on_every_call(db_url: str) -> None:
+    """Second `materialize_pricing` call upserts the full set again.
+
+    Regression for the old "first-run only" guard: after the first
+    materialize, the function used to short-circuit on any non-empty
+    table, which meant edits to `pricing_overrides.json` never reached
+    `pricing_snapshot` on restart. Here we delete a row to stand in
+    for "an override just added a model that wasn't there before" and
+    assert the next materialize restores it.
+    """
     migrate_to_head()
-    first = materialize_pricing_if_empty()
+    first = materialize_pricing()
     assert first > 0
 
-    second = materialize_pricing_if_empty()
-    assert second == 0
+    with get_session() as session:
+        baseline = {
+            (row.provider, row.model) for row in session.scalars(select(PricingSnapshot)).all()
+        }
+        # Drop one row to simulate a row that "isn't there yet but should be".
+        target_provider, target_model = next(iter(baseline))
+        session.query(PricingSnapshot).filter_by(
+            provider=target_provider, model=target_model
+        ).delete()
+        session.commit()
+
+    second = materialize_pricing()
+    assert second == first  # full set re-asserted, not zero
 
     with get_session() as session:
-        row_count = session.scalar(select(func.count()).select_from(PricingSnapshot))
-    assert row_count == first  # unchanged
+        after = {
+            (row.provider, row.model) for row in session.scalars(select(PricingSnapshot)).all()
+        }
+    assert after == baseline  # deleted row was restored
 
 
 def test_quality_snapshot_table_exists_but_stays_empty(db_url: str) -> None:
