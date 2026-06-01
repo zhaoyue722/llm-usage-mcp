@@ -237,6 +237,73 @@ class ListProvidersResult(ResultBase):
     providers: list[ProviderEntry]
 
 
+# --- status (CLI diagnostic, no MCP tool) ----------------------------------
+# `llm-usage status` reports a snapshot of "is everything wired up?": DB,
+# proxy reachability, per-provider config, pricing freshness. Nested
+# `StatusReport` shape so `--json` consumers can read each leg without
+# string-parsing the human view.
+
+
+class StatusDatabase(ResultBase):
+    """SQLite stats. `None` on the parent when the DB hasn't been created yet."""
+
+    path: str
+    size_bytes: int
+    schema_revision: str | None  # `None` if the alembic_version table is empty.
+    schema_at_head: bool
+    event_count: int
+    oldest_event_ms: int | None
+    newest_event_ms: int | None
+
+
+class StatusProxy(ResultBase):
+    """Capture-proxy binding + reachability probe.
+
+    `reachable=None` means the probe was skipped (the `--no-net` CLI
+    flag, or any other reason the caller doesn't want a network
+    syscall during diagnostics — offline laptop, CI, etc.).
+    """
+
+    host: str
+    port: int
+    reachable: bool | None
+
+
+class StatusProvider(ResultBase):
+    """Per-provider configuration view. One entry per `KNOWN_PROVIDERS`."""
+
+    name: str  # lowercase DB-style: "anthropic"
+    display_name: str  # branded: "Anthropic", "OpenAI"
+    key_set: bool
+    base_url: str
+    model_count: int  # rows in `pricing_snapshot` for this provider.
+
+
+class StatusPricing(ResultBase):
+    """`pricing_snapshot` summary. `None` when the DB hasn't been created yet."""
+
+    model_count: int
+    provider_count: int
+    newest_fetched_at_ms: int | None
+
+
+class StatusReport(ResultBase):
+    """Top-level result of `llm-usage status`.
+
+    `database` and `pricing` are both `None` when the DB file doesn't
+    exist yet — running `status` before `proxy` or `mcp` has ever
+    booted (so `bootstrap()` hasn't run) is a legitimate state. The
+    renderer shows a single "database not initialized" line in that
+    case rather than fake-empty Database / Pricing blocks.
+    """
+
+    version: str
+    database: StatusDatabase | None
+    proxy: StatusProxy
+    providers: list[StatusProvider]
+    pricing: StatusPricing | None
+
+
 __all__ = [
     "CompareProvidersParams",
     "CompareProvidersResult",
@@ -260,6 +327,11 @@ __all__ = [
     "ResultBase",
     "SpendFilter",
     "SpendGroup",
+    "StatusDatabase",
+    "StatusPricing",
+    "StatusProvider",
+    "StatusProxy",
+    "StatusReport",
     "TopModel",
     "TopProvider",
     "UsageSummaryParams",

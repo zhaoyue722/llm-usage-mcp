@@ -33,10 +33,13 @@ from llm_usage.capture.proxy import run_proxy
 from llm_usage.cli_render import (
     format_compare_result,
     format_spend_groups,
+    format_status,
     format_usage_summary,
 )
+from llm_usage.config import get_settings
 from llm_usage.core.compare import project_costs
 from llm_usage.core.db.session import get_session
+from llm_usage.core.diagnostics import collect_status
 from llm_usage.core.models import GroupBy, Period, SpendFilter
 from llm_usage.core.spend import aggregate_spend, period_window, summarize_usage
 
@@ -300,6 +303,55 @@ def spend(
             ),
             color=color_enabled,
         )
+
+
+@app.command()
+def status(
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the `StatusReport` Pydantic shape instead of the human view.",
+    ),
+    color: ColorMode = typer.Option(
+        ColorMode.auto,
+        "--color",
+        help="auto = color on TTY only (respects NO_COLOR); always = force on; never = force off.",
+    ),
+    no_net: bool = typer.Option(
+        False,
+        "--no-net",
+        help=(
+            "Skip the capture-proxy TCP probe. The proxy `status` field "
+            "reports `unknown` instead — useful when offline or on a "
+            "flaky network so `status` doesn't hang on the probe."
+        ),
+    ),
+) -> None:
+    """Snapshot of the local install: DB, proxy, providers, pricing.
+
+    Read-only. Never creates files — running `status` on a brand-new
+    install before `proxy` or `mcp` has booted reports
+    "database not initialized" rather than silently materializing
+    `~/.llm-usage/usage.db`. Missing keys / not-running proxy are
+    informational (yellow), not errors. Exit code is always 0
+    unless a hard failure (e.g., the DB file is unreadable) fires.
+    """
+    settings = get_settings()
+    report = collect_status(settings, check_proxy=not no_net)
+
+    if json_output:
+        typer.echo(json.dumps(report.model_dump(), indent=2))
+        return
+
+    color_enabled = _resolve_color(color)
+    typer.echo(
+        format_status(
+            report,
+            color_enabled=color_enabled,
+            now_ms=int(time.time() * 1000),
+        ),
+        color=color_enabled,
+    )
 
 
 def _resolve_color(mode: ColorMode) -> bool:

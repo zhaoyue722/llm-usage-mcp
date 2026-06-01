@@ -14,6 +14,7 @@ import re
 from llm_usage.cli_render import (
     format_compare_result,
     format_spend_groups,
+    format_status,
     format_usage_summary,
 )
 from llm_usage.core.models import (
@@ -22,6 +23,11 @@ from llm_usage.core.models import (
     QuerySpendResult,
     RankedEntry,
     SpendGroup,
+    StatusDatabase,
+    StatusPricing,
+    StatusProvider,
+    StatusProxy,
+    StatusReport,
     TopModel,
     TopProvider,
     UsageSummaryResult,
@@ -736,3 +742,270 @@ def test_groups_color_disabled_emits_no_ansi() -> None:
         color_enabled=False,
     )
     assert _ANSI_RE.search(out) is None
+
+
+# === format_status =======================================================
+
+
+def _providers(
+    *entries: tuple[str, str, bool, str, int],
+) -> list[StatusProvider]:
+    """Build `StatusProvider` rows from (name, display, key_set, url, count) tuples."""
+    return [
+        StatusProvider(
+            name=name,
+            display_name=display,
+            key_set=key_set,
+            base_url=url,
+            model_count=count,
+        )
+        for name, display, key_set, url, count in entries
+    ]
+
+
+def _default_providers() -> list[StatusProvider]:
+    return _providers(
+        ("anthropic", "Anthropic", True, "https://api.anthropic.com", 8),
+        ("openai", "OpenAI", False, "https://api.openai.com/v1", 24),
+        ("deepseek", "DeepSeek", True, "https://api.deepseek.com", 2),
+        ("qwen", "Qwen", False, "https://dashscope.aliyuncs.com/compatible-mode/v1", 4),
+    )
+
+
+def _status(
+    *,
+    database: StatusDatabase | None = None,
+    proxy: StatusProxy | None = None,
+    providers: list[StatusProvider] | None = None,
+    pricing: StatusPricing | None = None,
+    version: str = "0.1.0",
+) -> StatusReport:
+    return StatusReport(
+        version=version,
+        database=database,
+        proxy=proxy or StatusProxy(host="127.0.0.1", port=5525, reachable=False),
+        providers=providers or _default_providers(),
+        pricing=pricing,
+    )
+
+
+def test_status_no_db_renders_not_initialized_hint() -> None:
+    out = format_status(_status(), color_enabled=False, now_ms=_WEEK_END_MS)
+    assert "Database" in out
+    assert "not initialized" in out
+    # No Pricing section appears when there's no DB.
+    assert "Pricing" not in out
+
+
+def test_status_renders_version_banner_first() -> None:
+    out = format_status(_status(version="9.9.9"), color_enabled=False, now_ms=_WEEK_END_MS)
+    assert out.splitlines()[0] == "llm-usage 9.9.9"
+
+
+def test_status_database_block_shows_path_size_schema_events() -> None:
+    db = StatusDatabase(
+        path="/tmp/test.db",
+        size_bytes=1_250_000,
+        schema_revision="abc123",
+        schema_at_head=True,
+        event_count=42,
+        oldest_event_ms=_WEEK_START_MS,
+        newest_event_ms=_WEEK_END_MS,
+    )
+    out = format_status(
+        _status(
+            database=db,
+            pricing=StatusPricing(
+                model_count=10, provider_count=4, newest_fetched_at_ms=_WEEK_END_MS
+            ),
+        ),
+        color_enabled=False,
+        now_ms=_WEEK_END_MS,
+    )
+    assert "/tmp/test.db" in out
+    assert "1.2 MB" in out
+    assert "head (rev abc123)" in out
+    assert "42 (oldest 2026-05-26, newest 2026-06-01" in out
+
+
+def test_status_database_block_shows_empty_state_when_no_events() -> None:
+    db = StatusDatabase(
+        path="/tmp/test.db",
+        size_bytes=4096,
+        schema_revision="abc123",
+        schema_at_head=True,
+        event_count=0,
+        oldest_event_ms=None,
+        newest_event_ms=None,
+    )
+    out = format_status(_status(database=db), color_enabled=False, now_ms=_WEEK_END_MS)
+    assert "none recorded yet" in out
+
+
+def test_status_schema_behind_head_flags_attention() -> None:
+    db = StatusDatabase(
+        path="/tmp/test.db",
+        size_bytes=4096,
+        schema_revision="oldrev",
+        schema_at_head=False,
+        event_count=0,
+        oldest_event_ms=None,
+        newest_event_ms=None,
+    )
+    out = format_status(_status(database=db), color_enabled=False, now_ms=_WEEK_END_MS)
+    assert "behind" in out
+    assert "next boot will migrate" in out
+
+
+def test_status_proxy_running_renders_green_without_start_hint() -> None:
+    out = format_status(
+        _status(
+            proxy=StatusProxy(host="127.0.0.1", port=5525, reachable=True),
+        ),
+        color_enabled=False,
+        now_ms=_WEEK_END_MS,
+    )
+    assert "running" in out
+    assert "start" not in out  # hint suppressed when already running
+    assert "127.0.0.1:5525" in out
+
+
+def test_status_proxy_not_running_renders_yellow_and_start_hint() -> None:
+    out = format_status(
+        _status(
+            proxy=StatusProxy(host="127.0.0.1", port=5525, reachable=False),
+        ),
+        color_enabled=False,
+        now_ms=_WEEK_END_MS,
+    )
+    assert "not running" in out
+    assert "uv run llm-usage proxy" in out
+
+
+def test_status_proxy_unknown_renders_no_net_marker() -> None:
+    out = format_status(
+        _status(
+            proxy=StatusProxy(host="127.0.0.1", port=5525, reachable=None),
+        ),
+        color_enabled=False,
+        now_ms=_WEEK_END_MS,
+    )
+    assert "unknown (--no-net)" in out
+
+
+def test_status_providers_block_lists_every_provider_with_key_state() -> None:
+    out = format_status(_status(), color_enabled=False, now_ms=_WEEK_END_MS)
+    for name in ("Anthropic", "OpenAI", "DeepSeek", "Qwen"):
+        assert name in out
+    # Anthropic + DeepSeek have keys; OpenAI + Qwen don't.
+    assert "key set" in out
+    assert "key missing" in out
+
+
+def test_status_providers_block_shows_each_base_url() -> None:
+    out = format_status(_status(), color_enabled=False, now_ms=_WEEK_END_MS)
+    assert "https://api.anthropic.com" in out
+    assert "https://api.openai.com/v1" in out
+
+
+def test_status_providers_block_handles_singular_model_count() -> None:
+    out = format_status(
+        _status(
+            providers=_providers(
+                ("openai", "OpenAI", True, "https://api.openai.com/v1", 1),
+            ),
+        ),
+        color_enabled=False,
+        now_ms=_WEEK_END_MS,
+    )
+    assert "1 model priced" in out
+    assert "1 models priced" not in out
+
+
+def test_status_pricing_block_shows_catalog_and_refreshed_age() -> None:
+    # Fetched two days before _WEEK_END_MS.
+    two_days_ms = 2 * 24 * 3600 * 1000
+    out = format_status(
+        _status(
+            database=_full_db(),
+            pricing=StatusPricing(
+                model_count=38,
+                provider_count=4,
+                newest_fetched_at_ms=_WEEK_END_MS - two_days_ms,
+            ),
+        ),
+        color_enabled=False,
+        now_ms=_WEEK_END_MS,
+    )
+    assert "38 models across 4 providers" in out
+    assert "2 days ago" in out
+
+
+def test_status_pricing_stale_pricing_flags_attention_color() -> None:
+    """Fetched > 14 days ago → yellow."""
+    twenty_days_ms = 20 * 24 * 3600 * 1000
+    out = format_status(
+        _status(
+            database=_full_db(),
+            pricing=StatusPricing(
+                model_count=38,
+                provider_count=4,
+                newest_fetched_at_ms=_WEEK_END_MS - twenty_days_ms,
+            ),
+        ),
+        color_enabled=True,
+        now_ms=_WEEK_END_MS,
+    )
+    # The "20 days ago" line lives on the refreshed row; yellow = SGR 33.
+    refreshed_line = next(line for line in out.split("\n") if "20 days ago" in line)
+    assert "33" in _extract_ansi_codes(refreshed_line)
+
+
+def test_status_color_disabled_emits_no_ansi() -> None:
+    out = format_status(
+        _status(
+            database=_full_db(),
+            pricing=StatusPricing(
+                model_count=4, provider_count=4, newest_fetched_at_ms=_WEEK_END_MS
+            ),
+        ),
+        color_enabled=False,
+        now_ms=_WEEK_END_MS,
+    )
+    assert _ANSI_RE.search(out) is None
+
+
+def test_status_color_enabled_marks_section_labels_cyan() -> None:
+    out = format_status(
+        _status(
+            database=_full_db(),
+            pricing=StatusPricing(
+                model_count=4, provider_count=4, newest_fetched_at_ms=_WEEK_END_MS
+            ),
+        ),
+        color_enabled=True,
+        now_ms=_WEEK_END_MS,
+    )
+    for label in ("Database", "Capture proxy", "Providers", "Pricing"):
+        label_line = next(line for line in out.split("\n") if label in line)
+        assert "36" in _extract_ansi_codes(label_line)
+
+
+def test_status_color_enabled_marks_key_set_green_and_missing_yellow() -> None:
+    out = format_status(_status(), color_enabled=True, now_ms=_WEEK_END_MS)
+    set_line = next(line for line in out.split("\n") if "Anthropic" in line)
+    missing_line = next(line for line in out.split("\n") if "OpenAI" in line)
+    assert "32" in _extract_ansi_codes(set_line)  # green
+    assert "33" in _extract_ansi_codes(missing_line)  # yellow
+
+
+def _full_db() -> StatusDatabase:
+    return StatusDatabase(
+        path="/tmp/test.db",
+        size_bytes=2048,
+        schema_revision="abc123",
+        schema_at_head=True,
+        event_count=10,
+        oldest_event_ms=_WEEK_START_MS,
+        newest_event_ms=_WEEK_END_MS,
+    )
