@@ -32,6 +32,7 @@ import typer
 from llm_usage.capture.proxy import run_proxy
 from llm_usage.cli_render import (
     format_compare_result,
+    format_providers,
     format_spend_groups,
     format_status,
     format_usage_summary,
@@ -41,6 +42,7 @@ from llm_usage.core.compare import project_costs
 from llm_usage.core.db.session import get_session
 from llm_usage.core.diagnostics import collect_status
 from llm_usage.core.models import GroupBy, Period, SpendFilter
+from llm_usage.core.providers import collect_providers
 from llm_usage.core.spend import aggregate_spend, period_window, summarize_usage
 
 app = typer.Typer(
@@ -354,6 +356,56 @@ def status(
     )
 
 
+@app.command()
+def providers(
+    show_models: bool = typer.Option(
+        False,
+        "--models",
+        "-m",
+        help="Expand each provider with its priced model list underneath.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the `ProvidersReport` Pydantic shape instead of the human view.",
+    ),
+    color: ColorMode = typer.Option(
+        ColorMode.auto,
+        "--color",
+        help="auto = color on TTY only (respects NO_COLOR); always = force on; never = force off.",
+    ),
+) -> None:
+    """List configured providers with key state, wire-format, model count.
+
+    Deeper than the `status` Providers block: adds `openai-compat`
+    flag and the optional per-provider model list (`--models`). Read-
+    only. Never creates files — running before `proxy` or `mcp` has
+    booted shows every `KNOWN_PROVIDERS` row with zero models priced
+    rather than silently materializing the database.
+
+    For "what can I call right now," prefer the MCP `list_providers`
+    tool — it only surfaces providers with priced models. This command
+    answers "what's wired up and where," including providers whose
+    pricing hasn't been seeded yet.
+    """
+    settings = get_settings()
+    report = collect_providers(settings)
+
+    if json_output:
+        typer.echo(json.dumps(report.model_dump(), indent=2))
+        return
+
+    color_enabled = _resolve_color(color)
+    typer.echo(
+        format_providers(
+            report,
+            color_enabled=color_enabled,
+            show_models=show_models,
+        ),
+        color=color_enabled,
+    )
+
+
 def _resolve_color(mode: ColorMode) -> bool:
     """Decide whether to emit ANSI escapes for human-readable output.
 
@@ -394,4 +446,4 @@ def proxy_main() -> None:
     standalone()
 
 
-__all__ = ["app", "compare", "main", "proxy", "proxy_main"]
+__all__ = ["app", "compare", "main", "providers", "proxy", "proxy_main"]

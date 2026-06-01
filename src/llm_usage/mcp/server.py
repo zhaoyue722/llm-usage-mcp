@@ -43,6 +43,7 @@ from llm_usage.core.models import (
     UsageSummaryResult,
 )
 from llm_usage.core.pricing import CostCalculator, Pricing, all_pricing, nano_to_usd
+from llm_usage.core.providers import OPENAI_COMPATIBLE
 from llm_usage.core.recording import record_event
 from llm_usage.core.spend import (
     aggregate_spend,
@@ -51,17 +52,6 @@ from llm_usage.core.spend import (
 )
 
 server: FastMCP = FastMCP(name="llm-usage")
-
-# Static provider metadata. Anthropic uses its own `/v1/messages` shape;
-# OpenAI, Qwen (via DashScope's compatible-mode endpoint), and DeepSeek
-# all speak OpenAI's `/v1/chat/completions` wire format. This isn't user
-# data, so it lives in code rather than in the DB.
-_OPENAI_COMPATIBLE: Final[dict[str, bool]] = {
-    "anthropic": False,
-    "openai": True,
-    "qwen": True,
-    "deepseek": True,
-}
 
 # How many rows `usage://recent_events` returns. Spec leaves N unspecified;
 # 50 is enough for "what just happened" without overwhelming a client that
@@ -461,7 +451,7 @@ async def list_providers() -> ListProvidersResult:
             ProviderEntry(
                 name=provider,
                 models=models,
-                openai_compatible=_OPENAI_COMPATIBLE.get(provider, False),
+                openai_compatible=OPENAI_COMPATIBLE.get(provider, False),
             )
             for provider, models in sorted(by_provider.items())
         ]
