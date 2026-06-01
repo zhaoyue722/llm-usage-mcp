@@ -221,10 +221,20 @@ def test_spend_group_by_day_keys_are_iso_dates(seeded_db: Path, runner: CliRunne
 
 
 def test_spend_filters_without_group_by_errors_out(seeded_db: Path, runner: CliRunner) -> None:
-    """`--provider X` makes no sense in the headline summary view."""
+    """`--provider X` makes no sense in the headline summary view.
+
+    Rich wraps Typer's error envelope inside a colored box whose width
+    depends on the runner's terminal — on a narrow CI shell the `--`
+    prefix can wrap onto its own line, splitting `--group-by` mid-token.
+    Strip ANSI and search for the wrap-safe substring `group` to make
+    the assertion stable across terminal widths.
+    """
     result = runner.invoke(app, ["spend", "--provider", "anthropic", "--color", "never"])
     assert result.exit_code != 0
-    assert "--group-by" in result.stderr or "--group-by" in result.stdout
+    plain_stderr = _ANSI_RE.sub("", result.stderr)
+    assert "group" in plain_stderr.lower(), (
+        f"expected the --group-by guard message in stderr; got: {plain_stderr!r}"
+    )
 
 
 def test_spend_filters_with_group_by_apply(seeded_db: Path, runner: CliRunner) -> None:
