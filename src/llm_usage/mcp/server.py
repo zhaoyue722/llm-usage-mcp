@@ -25,6 +25,7 @@ from typing import Any, Final
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy import desc, select
 
+from llm_usage.core.compare import project_costs as _project_compare
 from llm_usage.core.db.models import PricingSnapshot, UsageEvent
 from llm_usage.core.db.session import get_session
 from llm_usage.core.models import (
@@ -36,7 +37,6 @@ from llm_usage.core.models import (
     PricingEntry,
     ProviderEntry,
     QuerySpendResult,
-    RankedEntry,
     RecommendProviderResult,
     RecordUsageResult,
     SpendFilter,
@@ -320,48 +320,12 @@ async def compare_providers(
     for future per-row caveats like "tiered pricing approximated").
     """
     with get_session() as session:
-        pricings = all_pricing(session)
-
-    if models is not None:
-        wanted = set(models)
-        pricings = [p for p in pricings if p.model in wanted]
-
-    # Project each model's cost for the hypothetical workload. `pricings`
-    # is already sorted by (provider, model), and Python's sort is stable,
-    # so sorting by cost keeps that order as the tie-breaker.
-    projected = [
-        (
-            pricing,
-            CostCalculator(pricing).cost_nano_usd(
-                input_tokens=expected_input_tokens,
-                output_tokens=expected_output_tokens,
-            ),
+        return _project_compare(
+            session,
+            input_tokens=expected_input_tokens,
+            output_tokens=expected_output_tokens,
+            models=models,
         )
-        for pricing in pricings
-    ]
-    projected.sort(key=lambda pair: pair[1])
-
-    ranked: list[RankedEntry] = []
-    if projected:
-        cheapest_nano = projected[0][1]
-        for pricing, cost_nano in projected:
-            # cheapest_nano is 0 only when the whole workload projects to
-            # zero cost (e.g. both token counts are 0) — then every entry
-            # is 0 too, so 100% is the correct relative figure for all.
-            relative_pct = (
-                100.0 if cheapest_nano == 0 else round(cost_nano / cheapest_nano * 100, 2)
-            )
-            ranked.append(
-                RankedEntry(
-                    provider=pricing.provider,
-                    model=pricing.model,
-                    cost_usd=nano_to_usd(cost_nano),
-                    relative_cost_pct=relative_pct,
-                    notes=None,
-                )
-            )
-
-    return CompareProvidersResult(ranked=ranked)
 
 
 @server.tool()

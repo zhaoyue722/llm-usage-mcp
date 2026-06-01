@@ -20,8 +20,15 @@ dependencies = [
 ]
 
 [project.scripts]
+# Multi-command CLI: `llm-usage proxy`, `llm-usage compare`, ...
+llm-usage = "llm_usage.cli:main"
+# Stdio MCP server — its own script because the boot path differs (no Typer
+# parsing; stdio is the only "argument").
 llm-usage-mcp = "llm_usage:main"
-llm-usage-proxy = "llm_usage.cli:main"
+# Backward-compat alias for `llm-usage proxy`, documented in the README.
+# Kept as a thin standalone so existing `uv run llm-usage-proxy` setups don't
+# break when `llm-usage` becomes the primary entry.
+llm-usage-proxy = "llm_usage.cli:proxy_main"
 
 [build-system]
 requires = ["uv_build>=0.11.1,<0.12.0"]
@@ -64,6 +71,12 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]  # allow assert in tests
+
+[tool.ruff.lint.flake8-bugbear]
+# Typer's idiom is `def cmd(x: int = typer.Option(...))` — the call in the
+# default position is *the* design pattern, not a smell. Whitelist it (and
+# `typer.Argument`) so B008 doesn't fight Typer.
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
 
 [tool.ruff.format]
 quote-style = "double"
