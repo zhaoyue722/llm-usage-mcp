@@ -427,6 +427,39 @@ def test_summary_singular_call_count_is_grammatical() -> None:
     assert "across 1 calls" not in out
 
 
+def test_summary_top_providers_and_top_models_align_vertically() -> None:
+    """Provider names ("Anthropic" = 9) are shorter than model names
+    ("claude-sonnet-4-6" = 17). The shared key-column width forces
+    both blocks to pad to the longer key, so bars / costs / pcts
+    line up when the eye sweeps from the providers block to the
+    models block."""
+    result = _summary(
+        total_cost=0.10,
+        call_count=2,
+        top_providers=[("anthropic", 0.08, 80.0), ("openai", 0.02, 20.0)],
+        top_models=[
+            ("claude-sonnet-4-6", 0.08, 80.0),
+            ("gpt-5-nano", 0.02, 20.0),
+        ],
+    )
+    out = format_usage_summary(
+        result,
+        period="week",
+        start_ms=_WEEK_START_MS,
+        end_ms=_WEEK_END_MS,
+        color_enabled=False,
+        include_failed=False,
+    )
+    lines = out.split("\n")
+    # The bar's first glyph marks the start of the bar column. Pull it
+    # off one row in each block and assert they match.
+    p_line = next(line for line in lines if "Anthropic" in line)
+    m_line = next(line for line in lines if "claude-sonnet-4-6" in line)
+    assert p_line.index("▅") == m_line.index("▅")
+    # `$` marks the start of the cost column. Same invariant.
+    assert p_line.index("$") == m_line.index("$")
+
+
 def test_summary_omits_largest_call_section_when_none() -> None:
     out = format_usage_summary(
         _summary(

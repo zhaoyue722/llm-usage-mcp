@@ -339,14 +339,22 @@ def format_usage_summary(
         _style(_DIVIDER, color_enabled, dim=True),
     ]
 
+    # Compute one key-column width across both blocks so the bars,
+    # costs, and pct columns line up vertically when the eye sweeps
+    # from `top providers:` down to `top models:`. Provider names
+    # ("Anthropic" = 9) are usually shorter than model names
+    # ("claude-sonnet-4-6" = 17); without a shared width the bars
+    # would start at different columns.
+    key_w = _shared_key_width(result.top_providers, result.top_models)
+
     if result.top_providers:
         lines.append(_section_label("top providers:", color_enabled))
-        lines.extend(_render_top_providers(result.top_providers, bar_width, color_enabled))
+        lines.extend(_render_top_providers(result.top_providers, key_w, bar_width, color_enabled))
         lines.append("")
 
     if result.top_models:
         lines.append(_section_label("top models:", color_enabled))
-        lines.extend(_render_top_models(result.top_models, bar_width, color_enabled))
+        lines.extend(_render_top_models(result.top_models, key_w, bar_width, color_enabled))
         lines.append("")
 
     if result.largest_call is not None:
@@ -521,16 +529,33 @@ def _format_calls(n: int) -> str:
     return f"{n:,} call" if n == 1 else f"{n:,} calls"
 
 
+def _shared_key_width(providers: list[TopProvider], models: list[TopModel]) -> int:
+    """Largest key length across both top-N blocks.
+
+    Returning 0 for an empty pair would underpad anything, but in
+    practice the caller only invokes `_render_top_*` when the
+    corresponding list is non-empty, and the unused block doesn't
+    contribute. Width 1 floor keeps the math safe if both lists
+    happen to be empty (the format_usage_summary caller drops the
+    blocks entirely in that case, so this is belt-and-braces).
+    """
+    candidates: list[int] = []
+    if providers:
+        candidates.append(max(len(_provider_display(r.provider)) for r in providers))
+    if models:
+        candidates.append(max(len(r.model) for r in models))
+    return max(candidates) if candidates else 1
+
+
 def _render_top_providers(
-    rows: list[TopProvider], bar_width: int, color_enabled: bool
+    rows: list[TopProvider], key_w: int, bar_width: int, color_enabled: bool
 ) -> list[str]:
-    name_w = max(len(_provider_display(r.provider)) for r in rows)
     out: list[str] = []
     for i, row in enumerate(rows):
         out.append(
             _format_top_row(
                 key=_provider_display(row.provider),
-                key_w=name_w,
+                key_w=key_w,
                 cost_usd=row.cost_usd,
                 pct=row.pct,
                 is_leader=(i == 0),
@@ -541,14 +566,15 @@ def _render_top_providers(
     return out
 
 
-def _render_top_models(rows: list[TopModel], bar_width: int, color_enabled: bool) -> list[str]:
-    name_w = max(len(r.model) for r in rows)
+def _render_top_models(
+    rows: list[TopModel], key_w: int, bar_width: int, color_enabled: bool
+) -> list[str]:
     out: list[str] = []
     for i, row in enumerate(rows):
         out.append(
             _format_top_row(
                 key=row.model,
-                key_w=name_w,
+                key_w=key_w,
                 cost_usd=row.cost_usd,
                 pct=row.pct,
                 is_leader=(i == 0),
