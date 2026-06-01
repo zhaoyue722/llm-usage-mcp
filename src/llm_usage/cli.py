@@ -24,14 +24,21 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from enum import StrEnum
 
 import typer
 
 from llm_usage.capture.proxy import run_proxy
-from llm_usage.cli_render import format_compare_result
+from llm_usage.cli_render import (
+    format_compare_result,
+    format_spend_groups,
+    format_usage_summary,
+)
 from llm_usage.core.compare import project_costs
 from llm_usage.core.db.session import get_session
+from llm_usage.core.models import GroupBy, Period, SpendFilter
+from llm_usage.core.spend import aggregate_spend, period_window, summarize_usage
 
 app = typer.Typer(
     name="llm-usage",
@@ -155,6 +162,144 @@ def compare(
         # plain text.
         color=color_enabled,
     )
+
+
+@app.command()
+def spend(
+    period: Period = typer.Option(
+        "week",
+        "--period",
+        "-p",
+        help="Calendar period (UTC). today / week (Mon-now) / month / year.",
+    ),
+    group_by: GroupBy | None = typer.Option(
+        None,
+        "--group-by",
+        "-g",
+        help=(
+            "Switch to query_spend rollup mode. provider / model / project / "
+            "tag / day. Without this flag, prints the usage_summary headline."
+        ),
+    ),
+    provider: str | None = typer.Option(
+        None,
+        "--provider",
+        help="Filter to one provider (requires --group-by).",
+    ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="Filter to one model (requires --group-by).",
+    ),
+    project: str | None = typer.Option(
+        None,
+        "--project",
+        help="Filter to one project tag (requires --group-by).",
+    ),
+    include_failed: bool = typer.Option(
+        False,
+        "--include-failed",
+        help=(
+            "Fold partial-stream / failure rows into totals. Off by default "
+            "so headline numbers aren't polluted by maybe-billed events."
+        ),
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help=(
+            "Emit the MCP tool's JSON shape — `UsageSummaryResult` by default, "
+            "`QuerySpendResult` with --group-by."
+        ),
+    ),
+    color: ColorMode = typer.Option(
+        ColorMode.auto,
+        "--color",
+        help="auto = color on TTY only (respects NO_COLOR); always = force on; never = force off.",
+    ),
+    bar_width: int = typer.Option(
+        14,
+        "--bar-width",
+        min=4,
+        max=80,
+        help="Width of the inline bar track in cells.",
+    ),
+) -> None:
+    """Show recorded spend over a calendar period.
+
+    Default view mirrors the MCP `usage_summary` tool: headline total,
+    top-3 providers, top-3 models, and the single largest call.
+    `--group-by` switches to the MCP `query_spend` view — one block
+    of rows for the chosen axis with bar / cost / calls / %. Filters
+    (`--provider`, `--model`, `--project`) AND-combine and require
+    `--group-by` because the headline view summarizes across
+    everything.
+    """
+    filters_given = any(v is not None for v in (provider, model, project))
+    if filters_given and group_by is None:
+        raise typer.BadParameter(
+            "--provider / --model / --project require --group-by; the "
+            "headline view summarizes across all rows.",
+            param_hint="--group-by",
+        )
+
+    now_ms = int(time.time() * 1000)
+    start_ms, end_ms = period_window(period, now_ms)
+    color_enabled = _resolve_color(color)
+
+    with get_session() as session:
+        if group_by is None:
+            summary = summarize_usage(
+                session,
+                period=period,
+                include_failed=include_failed,
+                now_ms=now_ms,
+            )
+            if json_output:
+                typer.echo(json.dumps(summary.model_dump(), indent=2))
+                return
+            typer.echo(
+                format_usage_summary(
+                    summary,
+                    period=period,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    include_failed=include_failed,
+                    color_enabled=color_enabled,
+                    bar_width=bar_width,
+                ),
+                color=color_enabled,
+            )
+            return
+
+        spend_filter = (
+            SpendFilter(provider=provider, model=model, project=project) if filters_given else None
+        )
+        rollup = aggregate_spend(
+            session,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            group_by=group_by,
+            filter=spend_filter,
+            include_failed=include_failed,
+            now_ms=now_ms,
+        )
+        if json_output:
+            typer.echo(json.dumps(rollup.model_dump(), indent=2))
+            return
+        typer.echo(
+            format_spend_groups(
+                rollup,
+                period=period,
+                group_by=group_by,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                include_failed=include_failed,
+                color_enabled=color_enabled,
+                bar_width=bar_width,
+            ),
+            color=color_enabled,
+        )
 
 
 def _resolve_color(mode: ColorMode) -> bool:
