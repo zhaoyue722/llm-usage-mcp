@@ -82,6 +82,8 @@ from llm_usage.core.models import (
     QuerySpendResult,
     RankedEntry,
     SpendGroup,
+    StatusProvider,
+    StatusReport,
     TopModel,
     TopProvider,
     UsageSummaryResult,
@@ -691,8 +693,243 @@ def _linear_bar(pct: float, width: int) -> str:
     return (_BAR_GLYPH * cells).ljust(width)
 
 
+# --- status renderer ------------------------------------------------------
+
+# Stale threshold for the "refreshed N days ago" line on the Pricing
+# section. Beyond 14 days the cron should have refreshed several times;
+# something is off if we're past it (refresh action disabled, fork out
+# of sync, etc.). Pre-spec'd decision: yellow at > 14 days, no red.
+_PRICING_STALE_DAYS: Final[int] = 14
+
+# Indent for the inner key/value lines under each `status` section
+# label. Two spaces — matches the indent used by `top providers:` etc.
+# under `spend`, so the visual register is the same across commands.
+_STATUS_INDENT: Final[str] = "  "
+
+
+def format_status(report: StatusReport, *, color_enabled: bool, now_ms: int) -> str:
+    """Render `llm-usage status` for terminal display.
+
+    Lines are flush-left section labels (bold cyan) with two-space-
+    indented key/value rows underneath. Most values are plain; the
+    "OK" states (key set, running, head) are green and the
+    "attention" states (key missing, not running, schema behind
+    head, stale pricing) are yellow. Deliberately no red — many
+    "attention" states are intentional (one provider configured,
+    proxy not yet started) and red would over-alarm.
+
+    `now_ms` is the rendered "now," passed by the caller so the
+    "N days ago" stamps in the Pricing section are deterministic in
+    tests. Production callers pass `int(time.time() * 1000)`.
+    """
+    blocks: list[list[str]] = [
+        [_style(f"llm-usage {report.version}", color_enabled, bold=True), ""],
+        _status_database_block(report, color_enabled),
+        _status_proxy_block(report, color_enabled),
+        _status_providers_block(report, color_enabled),
+        _status_pricing_block(report, color_enabled, now_ms),
+    ]
+    # Filter out empty blocks (DB-missing case skips the Database +
+    # Pricing sections entirely) then join with one blank line between.
+    nonempty = [b for b in blocks if b]
+    return "\n".join("\n".join(b) for b in nonempty).rstrip()
+
+
+def _status_database_block(report: StatusReport, color_enabled: bool) -> list[str]:
+    """Database section. When `report.database is None`, render a single
+    hint line instead — the DB file doesn't exist yet (no boot has
+    happened) and `status` shouldn't pretend it does."""
+    if report.database is None:
+        return [
+            _section_label("Database", color_enabled),
+            _STATUS_INDENT
+            + _style(
+                "not initialized (run llm-usage proxy or llm-usage-mcp once to migrate)",
+                color_enabled,
+                fg="yellow",
+            ),
+            "",
+        ]
+
+    db = report.database
+    rev_text = db.schema_revision or "missing"
+    schema_value = (
+        _style(f"head (rev {rev_text})", color_enabled, fg="green")
+        if db.schema_at_head
+        else _style(
+            f"behind (current rev {rev_text}; next boot will migrate)",
+            color_enabled,
+            fg="yellow",
+        )
+    )
+
+    if db.event_count == 0:
+        events_value = _style("none recorded yet", color_enabled, fg="yellow")
+    else:
+        oldest = _ms_to_date(db.oldest_event_ms) if db.oldest_event_ms else "—"
+        newest = _ms_to_date(db.newest_event_ms) if db.newest_event_ms else "—"
+        events_value = f"{db.event_count:,} (oldest {oldest}, newest {newest}, UTC)"
+
+    return [
+        _section_label("Database", color_enabled),
+        _kv_row("path", _shorten_home(db.path), color_enabled),
+        _kv_row("size", _format_bytes(db.size_bytes), color_enabled),
+        _kv_row("schema", schema_value, color_enabled, value_already_styled=True),
+        _kv_row("events", events_value, color_enabled, value_already_styled=True),
+        "",
+    ]
+
+
+def _status_proxy_block(report: StatusReport, color_enabled: bool) -> list[str]:
+    """Capture proxy section. Adds a `start` hint when not running."""
+    proxy = report.proxy
+    bind_value = f"{proxy.host}:{proxy.port}"
+    lines = [
+        _section_label("Capture proxy", color_enabled),
+        _kv_row("bind", bind_value, color_enabled),
+    ]
+    if proxy.reachable is None:
+        status_value = _style("unknown (--no-net)", color_enabled, dim=True)
+        lines.append(_kv_row("status", status_value, color_enabled, value_already_styled=True))
+    elif proxy.reachable:
+        status_value = _style("running", color_enabled, fg="green")
+        lines.append(_kv_row("status", status_value, color_enabled, value_already_styled=True))
+    else:
+        status_value = _style("not running", color_enabled, fg="yellow")
+        lines.append(_kv_row("status", status_value, color_enabled, value_already_styled=True))
+        start_hint = _style("uv run llm-usage proxy", color_enabled, dim=True)
+        lines.append(_kv_row("start", start_hint, color_enabled, value_already_styled=True))
+    lines.append("")
+    return lines
+
+
+def _status_providers_block(report: StatusReport, color_enabled: bool) -> list[str]:
+    """One row per provider — key status + base URL + model count.
+
+    Column widths are computed across the full provider list so the
+    base URLs line up regardless of whose key is set.
+    """
+    name_w = max(len(p.display_name) for p in report.providers)
+    state_w = max(len("key missing"), len("key set"))  # the two possible state words
+    lines: list[str] = [_section_label("Providers", color_enabled)]
+    for p in report.providers:
+        lines.append(
+            _format_provider_row(p, name_w=name_w, state_w=state_w, color_enabled=color_enabled)
+        )
+    lines.append("")
+    return lines
+
+
+def _format_provider_row(
+    provider: StatusProvider, *, name_w: int, state_w: int, color_enabled: bool
+) -> str:
+    """`  Name        state          base-url      N models priced` (one row)."""
+    name = provider.display_name.ljust(name_w)
+    if provider.key_set:
+        state = _style("key set".ljust(state_w), color_enabled, fg="green")
+    else:
+        state = _style("key missing".ljust(state_w), color_enabled, fg="yellow")
+    models_suffix = (
+        f"{provider.model_count} models priced" if provider.model_count != 1 else "1 model priced"
+    )
+    models_styled = _style(models_suffix, color_enabled, dim=True)
+    return f"{_STATUS_INDENT}{name}  {state}  {provider.base_url}  {models_styled}"
+
+
+def _status_pricing_block(report: StatusReport, color_enabled: bool, now_ms: int) -> list[str]:
+    """Pricing section. Skipped when the DB doesn't exist (mirrors Database)."""
+    if report.pricing is None:
+        return []  # already covered by the Database "not initialized" hint.
+
+    p = report.pricing
+    if p.model_count == 0:
+        catalog_value = _style("empty (run bootstrap to materialize)", color_enabled, fg="yellow")
+        return [
+            _section_label("Pricing", color_enabled),
+            _kv_row("catalog", catalog_value, color_enabled, value_already_styled=True),
+            "",
+        ]
+
+    catalog_value = f"{p.model_count} models across {p.provider_count} providers"
+    refreshed_value = _format_refreshed(p.newest_fetched_at_ms, now_ms, color_enabled)
+    return [
+        _section_label("Pricing", color_enabled),
+        _kv_row("catalog", catalog_value, color_enabled),
+        _kv_row("refreshed", refreshed_value, color_enabled, value_already_styled=True),
+        "",
+    ]
+
+
+def _format_refreshed(fetched_at_ms: int | None, now_ms: int, color_enabled: bool) -> str:
+    """`2026-05-31 (1 day ago)` — yellow when older than `_PRICING_STALE_DAYS`."""
+    if fetched_at_ms is None:
+        return _style("never", color_enabled, fg="yellow")
+
+    date_str = _ms_to_date(fetched_at_ms)
+    age_ms = max(0, now_ms - fetched_at_ms)
+    age_days = age_ms // (24 * 3600 * 1000)
+    if age_days == 0:
+        age_phrase = "today"
+    elif age_days == 1:
+        age_phrase = "1 day ago"
+    else:
+        age_phrase = f"{age_days} days ago"
+
+    rendered = f"{date_str} ({age_phrase})"
+    if age_days > _PRICING_STALE_DAYS:
+        return _style(rendered, color_enabled, fg="yellow")
+    return rendered
+
+
+# --- status: small helpers ----------------------------------------------
+
+
+def _kv_row(
+    label: str,
+    value: str,
+    color_enabled: bool,
+    *,
+    value_already_styled: bool = False,
+) -> str:
+    """`  label    value` — label dimmed, value already styled by caller (or plain).
+
+    Label width is fixed at 10 because every status label in this
+    file is ≤9 chars (`refreshed`, `events`, `schema`, …). Hard-coded
+    so the renderer doesn't have to know about every label up front.
+    """
+    label_styled = _style(label.ljust(10), color_enabled, dim=True)
+    return f"{_STATUS_INDENT}{label_styled}  {value}"
+
+
+def _format_bytes(n: int) -> str:
+    """`1.2 MB` / `512 KB` / `48 bytes` — single-decimal human size."""
+    if n < 1024:
+        return f"{n} bytes"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    return f"{n / (1024 * 1024 * 1024):.1f} GB"
+
+
+def _shorten_home(path: str) -> str:
+    """Replace the user's home dir prefix with `~` for readability."""
+    from pathlib import Path
+
+    try:
+        home = str(Path.home())
+    except RuntimeError:
+        return path
+    if path.startswith(home + "/"):
+        return "~" + path[len(home) :]
+    if path == home:
+        return "~"
+    return path
+
+
 __all__ = [
     "format_compare_result",
     "format_spend_groups",
+    "format_status",
     "format_usage_summary",
 ]
