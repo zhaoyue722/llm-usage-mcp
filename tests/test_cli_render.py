@@ -13,6 +13,7 @@ import re
 
 from llm_usage.cli_render import (
     format_compare_result,
+    format_providers,
     format_spend_groups,
     format_status,
     format_usage_summary,
@@ -20,6 +21,8 @@ from llm_usage.cli_render import (
 from llm_usage.core.models import (
     CompareProvidersResult,
     LargestCall,
+    ProviderRow,
+    ProvidersReport,
     QuerySpendResult,
     RankedEntry,
     SpendGroup,
@@ -1009,3 +1012,246 @@ def _full_db() -> StatusDatabase:
         oldest_event_ms=_WEEK_START_MS,
         newest_event_ms=_WEEK_END_MS,
     )
+
+
+# --- providers renderer ---------------------------------------------------
+
+
+def _provider_row(
+    name: str,
+    *,
+    display_name: str | None = None,
+    openai_compatible: bool = True,
+    key_set: bool = False,
+    base_url: str = "https://example.com",
+    models: list[str] | None = None,
+) -> ProviderRow:
+    """Small constructor; defaults keep individual tests focused on one axis."""
+    return ProviderRow(
+        name=name,
+        display_name=display_name or name.title(),
+        openai_compatible=openai_compatible,
+        key_set=key_set,
+        base_url=base_url,
+        models=models or [],
+    )
+
+
+def _providers_report(*rows: ProviderRow) -> ProvidersReport:
+    return ProvidersReport(providers=list(rows))
+
+
+def test_providers_renders_a_header_naming_the_count() -> None:
+    """The section label spells out how many providers are listed —
+    helps the reader sanity-check that nothing is filtered out."""
+    out = format_providers(
+        _providers_report(
+            _provider_row("anthropic", display_name="Anthropic", openai_compatible=False),
+            _provider_row("openai", display_name="OpenAI"),
+        ),
+        color_enabled=False,
+    )
+    first_line = out.split("\n")[0]
+    assert "Providers" in first_line
+    assert "2 known" in first_line
+
+
+def test_providers_emits_one_data_row_per_provider() -> None:
+    report = _providers_report(
+        _provider_row("anthropic", display_name="Anthropic"),
+        _provider_row("openai", display_name="OpenAI"),
+        _provider_row("deepseek", display_name="DeepSeek"),
+        _provider_row("qwen", display_name="Qwen"),
+    )
+    out = format_providers(report, color_enabled=False)
+    # Header + 4 rows = 5 lines total.
+    assert len(out.split("\n")) == 5
+
+
+def test_providers_renders_branded_display_names() -> None:
+    """The CamelCase display name is what the user sees, not the
+    lowercase DB name."""
+    out = format_providers(
+        _providers_report(
+            _provider_row("openai", display_name="OpenAI"),
+            _provider_row("deepseek", display_name="DeepSeek"),
+        ),
+        color_enabled=False,
+    )
+    assert "OpenAI" in out
+    assert "DeepSeek" in out
+    # The raw lowercase form shouldn't appear as a row label.
+    assert "openai " not in out  # trailing space catches the cell, not the URL
+
+
+def test_providers_renders_key_state_strings_distinctly() -> None:
+    """`key set` vs `key missing` is the headline signal — the renderer
+    must spell both states out, not collapse to a checkbox."""
+    out = format_providers(
+        _providers_report(
+            _provider_row("anthropic", display_name="Anthropic", key_set=True),
+            _provider_row("openai", display_name="OpenAI", key_set=False),
+        ),
+        color_enabled=False,
+    )
+    set_line = next(line for line in out.split("\n") if "Anthropic" in line)
+    missing_line = next(line for line in out.split("\n") if "OpenAI" in line)
+    assert "key set" in set_line
+    assert "key missing" in missing_line
+
+
+def test_providers_renders_openai_compat_flag() -> None:
+    """The `openai-compat: yes|no` column is the second informational
+    axis — it tells the user whether they can swap an OpenAI client
+    against the provider's base URL."""
+    out = format_providers(
+        _providers_report(
+            _provider_row("anthropic", display_name="Anthropic", openai_compatible=False),
+            _provider_row("openai", display_name="OpenAI", openai_compatible=True),
+        ),
+        color_enabled=False,
+    )
+    anthro_line = next(line for line in out.split("\n") if "Anthropic" in line)
+    openai_line = next(line for line in out.split("\n") if "OpenAI" in line)
+    assert "openai-compat: no" in anthro_line
+    assert "openai-compat: yes" in openai_line
+
+
+def test_providers_pluralizes_model_count() -> None:
+    """`1 model priced` vs `N models priced` — the pluralization bug
+    we hit on `spend` should not reappear here."""
+    out = format_providers(
+        _providers_report(
+            _provider_row("openai", display_name="OpenAI", models=["only-one"]),
+            _provider_row("deepseek", display_name="DeepSeek", models=["a", "b"]),
+            _provider_row("qwen", display_name="Qwen", models=[]),
+        ),
+        color_enabled=False,
+    )
+    single_line = next(line for line in out.split("\n") if "OpenAI" in line)
+    plural_line = next(line for line in out.split("\n") if "DeepSeek" in line)
+    zero_line = next(line for line in out.split("\n") if "Qwen" in line)
+    assert "1 model priced" in single_line
+    assert "2 models priced" in plural_line
+    assert "0 models priced" in zero_line
+
+
+def test_providers_renders_base_url_verbatim() -> None:
+    """Whatever URL `Settings.base_url_for` returns lands in the
+    row — no normalization, so a `LLM_USAGE_*_BASE_URL` override
+    shows up exactly as the user set it."""
+    out = format_providers(
+        _providers_report(
+            _provider_row(
+                "anthropic",
+                display_name="Anthropic",
+                base_url="https://proxy.example.com/foo",
+            ),
+        ),
+        color_enabled=False,
+    )
+    assert "https://proxy.example.com/foo" in out
+
+
+def test_providers_show_models_expands_one_line_per_model() -> None:
+    """`--models` flag: each priced model on its own indented line
+    underneath the provider row."""
+    out = format_providers(
+        _providers_report(
+            _provider_row(
+                "anthropic",
+                display_name="Anthropic",
+                models=["claude-opus-4-7", "claude-sonnet-4-6"],
+            ),
+        ),
+        color_enabled=False,
+        show_models=True,
+    )
+    # Header + 1 provider row + 2 model lines = 4.
+    assert len(out.split("\n")) == 4
+    assert "    claude-opus-4-7" in out
+    assert "    claude-sonnet-4-6" in out
+
+
+def test_providers_show_models_hint_for_unseeded_provider() -> None:
+    """A provider with no priced models should print an explicit hint
+    rather than a silent empty block — otherwise `--models` would
+    look broken for providers whose pricing hasn't been seeded."""
+    out = format_providers(
+        _providers_report(_provider_row("anthropic", display_name="Anthropic", models=[])),
+        color_enabled=False,
+        show_models=True,
+    )
+    assert "no models priced yet" in out
+
+
+def test_providers_show_models_off_by_default() -> None:
+    """Without `--show_models`, model names do not appear in the
+    output even if the provider has priced models."""
+    out = format_providers(
+        _providers_report(
+            _provider_row("anthropic", display_name="Anthropic", models=["claude-opus-4-7"]),
+        ),
+        color_enabled=False,
+    )
+    assert "claude-opus-4-7" not in out
+
+
+def test_providers_color_disabled_emits_no_ansi() -> None:
+    out = format_providers(
+        _providers_report(
+            _provider_row("anthropic", display_name="Anthropic", key_set=True),
+            _provider_row("openai", display_name="OpenAI", key_set=False),
+        ),
+        color_enabled=False,
+    )
+    assert _ANSI_RE.search(out) is None
+
+
+def test_providers_color_enabled_marks_section_label_cyan() -> None:
+    out = format_providers(
+        _providers_report(_provider_row("anthropic", display_name="Anthropic")),
+        color_enabled=True,
+    )
+    header = out.split("\n")[0]
+    assert "36" in _extract_ansi_codes(header)  # cyan fg
+    assert "1" in _extract_ansi_codes(header)  # bold
+
+
+def test_providers_color_enabled_marks_key_set_green_and_missing_yellow() -> None:
+    out = format_providers(
+        _providers_report(
+            _provider_row("anthropic", display_name="Anthropic", key_set=True),
+            _provider_row("openai", display_name="OpenAI", key_set=False),
+        ),
+        color_enabled=True,
+    )
+    set_line = next(line for line in out.split("\n") if "Anthropic" in line)
+    missing_line = next(line for line in out.split("\n") if "OpenAI" in line)
+    assert "32" in _extract_ansi_codes(set_line)  # green
+    assert "33" in _extract_ansi_codes(missing_line)  # yellow
+
+
+def test_providers_rows_align_when_model_counts_have_different_widths() -> None:
+    """Regression: the model-count column was variable width (8 vs 120
+    models) on the first prototype, so the base URL didn't line up
+    vertically. Padding the suffix to its widest entry fixes this; the
+    test pins it by checking that the base URL appears at the same
+    character offset in every row."""
+    report = _providers_report(
+        _provider_row("a", display_name="AAA", models=["x"]),  # 1 model = "1 model priced"
+        _provider_row("b", display_name="BBB", models=["y"] * 120),  # widest
+    )
+    out = format_providers(report, color_enabled=False)
+    data_lines = out.split("\n")[1:]  # skip header
+    assert len(data_lines) == 2
+    offsets = [line.index("https://example.com") for line in data_lines]
+    assert offsets[0] == offsets[1]
+
+
+def test_providers_empty_report_renders_a_one_line_hint() -> None:
+    """Defensive: `collect_providers` always returns rows, but if a
+    caller hands in an empty report the renderer shouldn't crash."""
+    out = format_providers(_providers_report(), color_enabled=False)
+    assert "no known providers" in out
+    assert "\n" not in out

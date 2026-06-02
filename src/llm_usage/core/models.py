@@ -304,6 +304,38 @@ class StatusReport(ResultBase):
     pricing: StatusPricing | None
 
 
+# --- providers (CLI deep-dive, no direct MCP equivalent) -------------------
+# `llm-usage providers` is a richer view than the MCP `list_providers` tool:
+# it covers every `KNOWN_PROVIDERS` row regardless of whether pricing has
+# been seeded, and adds `key_set` + `base_url` so the user can see why a
+# provider is configured-but-empty (or seeded-but-no-key). The JSON shape
+# is a strict superset of `ListProvidersResult` — same `name` / `models` /
+# `openai_compatible` fields, plus the four CLI-specific ones.
+
+
+class ProviderRow(ResultBase):
+    """One row of `llm-usage providers` output."""
+
+    name: str  # lowercase DB-style: "anthropic"
+    display_name: str  # branded: "Anthropic", "DeepSeek"
+    openai_compatible: bool
+    key_set: bool
+    base_url: str
+    models: list[str]  # sorted, sourced from `pricing_snapshot`
+
+
+class ProvidersReport(ResultBase):
+    """Top-level result of `llm-usage providers`.
+
+    `providers` covers every `KNOWN_PROVIDERS` entry — a provider with
+    no seeded pricing still appears (with `models=[]`) so the user
+    sees its configuration state. Sorted by `display_name` for a
+    stable, branded reading order.
+    """
+
+    providers: list[ProviderRow]
+
+
 __all__ = [
     "CompareProvidersParams",
     "CompareProvidersResult",
@@ -317,6 +349,8 @@ __all__ = [
     "Period",
     "PricingEntry",
     "ProviderEntry",
+    "ProviderRow",
+    "ProvidersReport",
     "QuerySpendParams",
     "QuerySpendResult",
     "RankedEntry",

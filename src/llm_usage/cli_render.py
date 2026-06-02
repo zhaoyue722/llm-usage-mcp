@@ -79,6 +79,8 @@ from llm_usage.core.models import (
     GroupBy,
     LargestCall,
     Period,
+    ProviderRow,
+    ProvidersReport,
     QuerySpendResult,
     RankedEntry,
     SpendGroup,
@@ -927,8 +929,136 @@ def _shorten_home(path: str) -> str:
     return path
 
 
+# --- providers renderer ---------------------------------------------------
+#
+# Layout: section header → one row per provider (`Name  key-state
+# openai-compat: yes/no  N models  base-url`). With `show_models=True`,
+# each provider row is followed by the priced model list, two-space-
+# further indented underneath the row. The same two-space convention
+# the spend and status renderers use, so the visual register matches.
+#
+# Color treatment (intentionally light — this is a configuration view,
+# not a ranking):
+#   - `key set`     → green
+#   - `key missing` → yellow
+#   - `openai-compat: yes/no` → dim (informational, not actionable)
+#   - model-count suffix → dim
+#   - base URL → default (the value the user typed / inherited)
+#   - section label → bold cyan, matching the other commands
+
+
+def format_providers(
+    report: ProvidersReport,
+    *,
+    color_enabled: bool,
+    show_models: bool = False,
+) -> str:
+    """Render `llm-usage providers` for terminal display. Returns one string.
+
+    `show_models=True` (the `--models` CLI flag) expands each row with
+    the provider's priced model list underneath. A provider with no
+    seeded pricing prints a single dim "no models priced yet" hint
+    rather than a silent empty block, so the user can tell apart
+    "not configured" from "configured but the catalog hasn't been
+    materialized."
+    """
+    if not report.providers:
+        # Defensive: `collect_providers` always returns one row per
+        # `KNOWN_PROVIDERS`, so this branch is only reached if someone
+        # constructs an empty `ProvidersReport` by hand. Keep the
+        # message terse rather than the multi-line "is the database
+        # bootstrapped?" hint — the situation is different.
+        return _style("no known providers", color_enabled, dim=True)
+
+    name_w = max(len(p.display_name) for p in report.providers)
+    state_w = max(len("key missing"), len("key set"))
+    compat_w = max(len("openai-compat: yes"), len("openai-compat: no"))
+    # Width of the "N models priced" / "1 model priced" suffix. Padded
+    # to the widest entry so the base-URL column lines up vertically
+    # across rows regardless of whether one provider has 8 priced
+    # models and another has 120.
+    models_w = max(len(_format_models_suffix(len(p.models))) for p in report.providers)
+
+    count = len(report.providers)
+    header = f"Providers · {count} known"
+
+    lines: list[str] = [_section_label(header, color_enabled)]
+
+    for provider in report.providers:
+        lines.append(
+            _format_providers_row(
+                provider,
+                name_w=name_w,
+                state_w=state_w,
+                compat_w=compat_w,
+                models_w=models_w,
+                color_enabled=color_enabled,
+            )
+        )
+        if show_models:
+            lines.extend(_format_provider_model_lines(provider, color_enabled))
+
+    return "\n".join(lines)
+
+
+def _format_models_suffix(count: int) -> str:
+    """`N models priced` / `1 model priced` — pluralization in one place.
+
+    Shared between width calculation (where the unstyled length is
+    what matters for padding) and the row renderer.
+    """
+    return f"{count} models priced" if count != 1 else "1 model priced"
+
+
+def _format_providers_row(
+    provider: ProviderRow,
+    *,
+    name_w: int,
+    state_w: int,
+    compat_w: int,
+    models_w: int,
+    color_enabled: bool,
+) -> str:
+    """`  Name  state  openai-compat: yes  N models  https://…`.
+
+    Per-field padding happens *before* styling — same lesson as
+    `compare`/`spend` — so ANSI escapes don't inflate `len()` and
+    knock subsequent columns out of alignment.
+    """
+    name = provider.display_name.ljust(name_w)
+
+    if provider.key_set:
+        state = _style("key set".ljust(state_w), color_enabled, fg="green")
+    else:
+        state = _style("key missing".ljust(state_w), color_enabled, fg="yellow")
+
+    compat_text = f"openai-compat: {'yes' if provider.openai_compatible else 'no'}"
+    compat = _style(compat_text.ljust(compat_w), color_enabled, dim=True)
+
+    models_suffix = _format_models_suffix(len(provider.models))
+    models_styled = _style(models_suffix.ljust(models_w), color_enabled, dim=True)
+
+    return f"{_STATUS_INDENT}{name}  {state}  {compat}  {models_styled}  {provider.base_url}"
+
+
+def _format_provider_model_lines(provider: ProviderRow, color_enabled: bool) -> list[str]:
+    """The expanded model list under one provider row (when `--models` is on).
+
+    Returns a single hint line for providers with no priced models,
+    otherwise one indented model name per line. The four-space indent
+    visually "hangs" the model list off the provider row's two-space
+    indent.
+    """
+    if not provider.models:
+        return [
+            "    " + _style("no models priced yet", color_enabled, dim=True),
+        ]
+    return ["    " + model for model in provider.models]
+
+
 __all__ = [
     "format_compare_result",
+    "format_providers",
     "format_spend_groups",
     "format_status",
     "format_usage_summary",
