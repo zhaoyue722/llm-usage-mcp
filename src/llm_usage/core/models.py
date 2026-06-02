@@ -132,6 +132,14 @@ class RankedEntry(ResultBase):
     # caveat (e.g., "tiered pricing approximated") doesn't require a
     # schema change. Always `None` today.
     notes: str | None
+    # How many catalog rows in the same (family_root, cost) class this
+    # entry represents — 1 for a unique row, N > 1 when the renderer's
+    # family-dedup collapsed N-1 alias/snapshot siblings into this one.
+    # The MCP `compare_providers` tool ships dedup enabled by default;
+    # set `include_snapshots=True` to disable, in which case every row
+    # is `variant_count=1`. Default is 1 so existing constructors
+    # (tests, ad-hoc result building) stay backward compatible.
+    variant_count: int = 1
 
 
 class CompareProvidersResult(ResultBase):
@@ -142,16 +150,50 @@ class CompareProvidersResult(ResultBase):
 
 
 class RecommendProviderParams(ParamsBase):
-    task_description: str
+    # Optional in v1: it's echoed into the reasoning but doesn't drive
+    # selection (cost-only ranking). Requiring it forced callers to
+    # invent garbage values like "anything" or "a"; making it optional
+    # closes the UX trap. Will become meaningful again when a future
+    # `quality_priority` axis lands alongside populated `quality_snapshot`.
+    task_description: str | None = None
     expected_input_tokens: int | None = None
     expected_output_tokens: int | None = None
     budget_usd: float | None = None
+    # Optional whitelist filters. None = no filter on that axis.
+    # Both AND-combine; budget applies after the whitelist (so an
+    # over-budget fallback returns the cheapest within the filter
+    # set, not the cheapest priced model overall).
+    providers: list[str] | None = None
+    models: list[str] | None = None
+
+
+class Alternative(ResultBase):
+    """One runner-up entry on `RecommendProviderResult.alternatives`.
+
+    Per-row `reasoning` is intentionally omitted — the main
+    `RecommendProviderResult.reasoning` already covers methodology
+    once, and a reasoning paragraph per runner-up would just
+    restate "next-cheapest" three times. The `(provider, model,
+    estimated_cost_usd)` triple is all the caller needs to surface
+    the option to a user or feed it into a follow-up call.
+    """
+
+    provider: str
+    model: str
+    estimated_cost_usd: float
 
 
 class RecommendProviderResult(ResultBase):
     provider: str
     model: str
     estimated_cost_usd: float
+    # Up to `_DEFAULT_ALTERNATIVES_COUNT` runner-ups from the same
+    # pool the chosen row came from, cost-ascending. Empty when the
+    # pool has only one element (e.g., after a `providers` /
+    # `models` filter narrows to a single model) — the caller can
+    # use the empty list as a signal to suppress the section in a
+    # human-readable view.
+    alternatives: list[Alternative]
     reasoning: str
 
 
@@ -337,6 +379,7 @@ class ProvidersReport(ResultBase):
 
 
 __all__ = [
+    "Alternative",
     "CompareProvidersParams",
     "CompareProvidersResult",
     "GetPricingParams",

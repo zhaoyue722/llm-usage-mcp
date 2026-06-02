@@ -258,6 +258,7 @@ parameters:
   expected_input_tokens:  integer required
   expected_output_tokens: integer required
   models:                 string[] optional  # restrict to these
+  include_snapshots:      boolean optional   # default: false
 returns:
   ranked: [
     {
@@ -265,10 +266,32 @@ returns:
       model:              string,
       cost_usd:           number,
       relative_cost_pct:  number,            # vs cheapest = 100%
-      notes:              string|null,        # reserved for per-row caveats; always null in v1
+      notes:              string|null,       # reserved for per-row caveats; always null in v1
+      variant_count:      integer,           # how many catalog rows this entry stands for; 1 = unique
     }
   ]
 ```
+
+> **v1 implementation notes.**
+> - `include_snapshots=false` (the default) family-dedups the ranked
+>   list: rows that share both a model-family root (alias vs pinned
+>   snapshot — see `core.pricing.family_root`) AND an identical
+>   projected cost collapse to one representative. The kept row's
+>   `variant_count` records how many catalog entries the row stands
+>   for; collapsed siblings are not surfaced individually.
+> - Dedup is gated on **both** family root and cost. When two variants
+>   in the same family are priced differently (uncommon — happens
+>   during snapshot promotions/discounts), both rows survive even with
+>   dedup on, because the price divergence is meaningful information
+>   the user shouldn't have to opt-in to see.
+> - Within a (family, cost) class the alphabetically-first member wins
+>   as the kept representative. For the common case of an alias + a
+>   pinned snapshot tied on price (e.g., `gpt-5-mini` and
+>   `gpt-5-mini-2025-08-07`), the alias is a strict lex prefix of the
+>   snapshot name, so the alias is kept.
+> - Set `include_snapshots=true` to disable dedup and see every
+>   catalog row (each with `variant_count=1`) — useful when comparing
+>   snapshot-by-snapshot pricing for production pinning.
 
 > **v1 scope note.** `task_type` and `include_cached_estimate` were
 > removed before shipping: cost is task-independent (`task_type` did
@@ -282,16 +305,52 @@ Recommends the cheapest priced model that fits the workload + budget.
 
 ```yaml
 parameters:
-  task_description:  string required
+  task_description:  string optional
   expected_input_tokens:  integer optional
   expected_output_tokens: integer optional
   budget_usd:        number optional
+  providers:         string[] optional   # restrict to these providers
+  models:            string[] optional   # restrict to these model names
 returns:
   provider:          string
   model:             string
   estimated_cost_usd: number
+  alternatives: [                       # up to 2 runner-ups, cost-asc
+    { provider, model, estimated_cost_usd }
+  ]
   reasoning:         string          # natural-language explanation
 ```
+
+> **v1 implementation notes.**
+> - `providers` and `models` are whitelists; both AND-combine when
+>   passed together (a candidate must be in both lists). Each accepts
+>   a non-empty list; omit the field entirely for "no filter on this
+>   axis." Unknown names in either list silently filter to nothing
+>   from that name (no error) — consistent with `get_pricing`'s
+>   "unknown returns empty" semantics. If the combined filter leaves
+>   zero candidates, the tool raises rather than fabricating a result.
+> - `budget_usd` is applied *after* the provider/model filters, so an
+>   over-budget fallback picks the cheapest candidate **within the
+>   filter set**, not the cheapest priced model overall.
+> - `alternatives` are the next-cheapest two candidates from the
+>   **same pool** the chosen row came from — affordable when the
+>   budget fits, the filtered candidates when the budget triggers a
+>   fallback. Empty list when the pool has only one element (no
+>   runners-up to show). Respects the same `providers` / `models`
+>   filters as the chosen row, so the alternatives don't contradict
+>   the user's filter. Per-row `reasoning` is intentionally omitted
+>   — the main `reasoning` covers methodology once.
+> - Alternatives are **family-deduped**: alias/snapshot variants of
+>   the chosen row (or of any already-listed alternative) are
+>   skipped, so the list always shows *distinct logical models*
+>   rather than three rows of the same model under different names.
+>   Same family-root rule as `compare_providers`.
+> - When the chosen row's cost ties with one or more **distinct-
+>   family** rows, the `reasoning` surfaces the tie explicitly
+>   ("*Tied with N other model(s) at $X.XXXX; picked alphabetically.
+>   See alternatives for the tied options.*"). Alias/snapshot ties
+>   with the chosen row's own family don't count — they're the same
+>   logical model, not a tied alternative.
 
 > **v1 scope note.** The original signature accepted a
 > `quality_priority` axis (`"lowest_cost" | "balanced" | "highest_quality"`)
@@ -303,7 +362,12 @@ returns:
 > importer; `quality_priority` returns at that point.
 > `task_description` is echoed into the `reasoning` string but does
 > not drive selection — the tool isn't an LLM and can't interpret
-> free text.
+> free text. It's **optional** in v1 (required-but-vestigial was a
+> UX trap forcing callers to invent garbage values); when omitted,
+> the `reasoning` opens with `"Recommending ..."` instead of the
+> `"For task 'X': recommending ..."` form. The field becomes
+> meaningful again when a future `quality_priority` axis lands
+> alongside a populated `quality_snapshot`.
 
 ### `get_pricing`
 

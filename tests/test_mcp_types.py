@@ -20,6 +20,7 @@ import pytest
 from pydantic import ValidationError
 
 from llm_usage.core.models import (
+    Alternative,
     CompareProvidersParams,
     CompareProvidersResult,
     GetPricingParams,
@@ -246,9 +247,38 @@ def test_recommend_provider_result() -> None:
         provider="deepseek",
         model="deepseek-chat",
         estimated_cost_usd=0.0015,
+        alternatives=[],
         reasoning="Lowest $/token among chat-quality models for your budget.",
     )
     assert r.estimated_cost_usd == 0.0015
+
+
+def test_recommend_provider_result_carries_alternatives() -> None:
+    """The result's `alternatives` field accepts a list of structured
+    `Alternative` rows. Pinning the cross-model attachment so a future
+    refactor doesn't accidentally flatten it to a list of strings or
+    a tuple shape."""
+    r = RecommendProviderResult(
+        provider="qwen",
+        model="qwen-turbo",
+        estimated_cost_usd=0.0003,
+        alternatives=[
+            Alternative(
+                provider="deepseek",
+                model="deepseek-coder",
+                estimated_cost_usd=0.0004,
+            ),
+            Alternative(
+                provider="openai",
+                model="gpt-5-nano",
+                estimated_cost_usd=0.0004,
+            ),
+        ],
+        reasoning="Cheapest of 159 priced models.",
+    )
+    assert len(r.alternatives) == 2
+    assert r.alternatives[0].provider == "deepseek"
+    assert r.alternatives[1].model == "gpt-5-nano"
 
 
 # --- get_pricing -----------------------------------------------------------

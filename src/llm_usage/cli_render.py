@@ -75,6 +75,7 @@ from typing import Final
 import click
 
 from llm_usage.core.models import (
+    Alternative,
     CompareProvidersResult,
     GroupBy,
     LargestCall,
@@ -83,6 +84,7 @@ from llm_usage.core.models import (
     ProvidersReport,
     QuerySpendResult,
     RankedEntry,
+    RecommendProviderResult,
     SpendGroup,
     StatusProvider,
     StatusReport,
@@ -156,6 +158,14 @@ def format_compare_result(
     # is cheapest-first, so the last row is the max.
     max_ratio = result.ranked[-1].relative_cost_pct / 100.0
 
+    # `×N` variant column. Width is set by the widest count actually
+    # rendered (`×N` with `len(str(N)) + 1`); 0 when no row has
+    # `variant_count > 1`, in which case the column is omitted entirely
+    # so a default-on dedup with nothing actually collapsed prints
+    # the same as before — no spurious empty trailing column.
+    variant_w = _variant_column_width(result.ranked)
+    show_variants = variant_w > 0
+
     lines: list[str] = [
         _style(
             f"projecting cost for {_format_tokens(input_tokens)} in"
@@ -175,13 +185,37 @@ def format_compare_result(
                 model_w=model_w,
                 bar_width=bar_width,
                 max_ratio=max_ratio,
+                variant_w=variant_w,
                 color_enabled=color_enabled,
             )
         )
 
     lines.append(_style(_DIVIDER, color_enabled, dim=True))
     lines.append(_style("note: cache pricing not applied (use --cache)", color_enabled, dim=True))
+    if show_variants:
+        lines.append(
+            _style(
+                "note: ×N indicates N collapsed catalog variants (--all to see)",
+                color_enabled,
+                dim=True,
+            )
+        )
     return "\n".join(lines)
+
+
+def _variant_column_width(ranked: list[RankedEntry]) -> int:
+    """Column width for the optional `×N` annotation. 0 when not needed.
+
+    Returns the width of the widest `×N` string among rows where
+    `variant_count > 1`. When no row has collapsed variants (either
+    because `include_snapshots=True` was passed or no families
+    collapsed naturally), returns 0 so the renderer can skip the
+    column entirely.
+    """
+    max_count = max((e.variant_count for e in ranked if e.variant_count > 1), default=1)
+    if max_count <= 1:
+        return 0
+    return len(f"×{max_count}")
 
 
 def _format_row(
@@ -192,6 +226,7 @@ def _format_row(
     model_w: int,
     bar_width: int,
     max_ratio: float,
+    variant_w: int,
     color_enabled: bool,
 ) -> str:
     """One data row. The winner row is bold-green; others heat the Pct% column."""
@@ -213,6 +248,7 @@ def _format_row(
     # Compose the line as plain text first so column widths are stable
     # regardless of color escapes.
     raw = f"{provider}  {model}  {bar}  {cost:>8}  {pct}"
+    raw += _variant_suffix(entry.variant_count, variant_w)
 
     if not color_enabled:
         return raw
@@ -220,9 +256,30 @@ def _format_row(
     if is_winner:
         return click.style(raw, fg="green", bold=True)
 
-    # Non-winner rows: heat the (already-padded) Pct% column only.
+    # Non-winner rows: heat the (already-padded) Pct% column only,
+    # leaving the variant column in its dim default. Variant suffix
+    # has its own dim styling pass so it doesn't pick up the heat
+    # color.
     styled_pct = _style_pct(pct, ratio)
-    return f"{provider}  {model}  {bar}  {cost:>8}  {styled_pct}"
+    base = f"{provider}  {model}  {bar}  {cost:>8}  {styled_pct}"
+    if variant_w == 0:
+        return base
+    variant_text = _variant_suffix(entry.variant_count, variant_w)
+    return base + _style(variant_text, color_enabled, dim=True)
+
+
+def _variant_suffix(variant_count: int, variant_w: int) -> str:
+    """Right-padded `   ×N` text, or whitespace of the same width if N≤1.
+
+    Called even when `variant_w == 0` (which yields an empty string),
+    so callers don't have to special-case "no column."
+    """
+    if variant_w == 0:
+        return ""
+    if variant_count <= 1:
+        # Blank cell of the same width as `×N` to keep column alignment.
+        return "   " + " " * variant_w
+    return "   " + f"×{variant_count}".rjust(variant_w)
 
 
 def _bar_cells(ratio: float, max_ratio: float, width: int) -> int:
@@ -1056,9 +1113,137 @@ def _format_provider_model_lines(provider: ProviderRow, color_enabled: bool) -> 
     return ["    " + model for model in provider.models]
 
 
+# --- recommend renderer ---------------------------------------------------
+#
+# Two-block layout:
+#
+#     Recommendation
+#       Qwen / qwen-flash       $0.0042
+#
+#     Reasoning
+#       For task 'summarize a transcript': recommending qwen/qwen-flash —
+#       the cheapest projected cost among 159 priced model(s). Estimated
+#       $0.0042 for 1,000 input / 1,000 output tokens. v1 ranks by cost
+#       only; task_description is echoed for context but does not drive
+#       selection.
+#
+# Color treatment:
+#   - Section labels: bold cyan (same as `status` / `spend`).
+#   - The chosen row: bold green — the leader-row convention.
+#   - Reasoning paragraph: dim — informational, structured by template
+#     not requiring the user's full attention.
+#
+# Reasoning is word-wrapped at `_RECOMMEND_REASONING_WIDTH`. The MCP
+# tool returns it as one long string; the CLI wraps for readability.
+
+
+# Width the reasoning paragraph is wrapped at. 78 leaves a 2-col
+# margin under an 80-col terminal — wide enough to keep most sentences
+# on one line, narrow enough that the dim paragraph doesn't run edge-
+# to-edge with the rest of the output.
+_RECOMMEND_REASONING_WIDTH: Final[int] = 78
+
+
+def format_recommend_result(
+    result: RecommendProviderResult,
+    *,
+    color_enabled: bool,
+) -> str:
+    """Render `recommend`'s result for terminal display. Returns one string.
+
+    Layout: `Recommendation` block (chosen provider / model + cost) →
+    `Alternatives` block (top-N runner-ups, only when non-empty) →
+    `Reasoning` block (word-wrapped paragraph). The chosen row is
+    green to match the leader-row convention from `compare` and
+    `spend`; alternatives sit underneath in default color (informative
+    but not competing for attention); the reasoning is dim.
+
+    The Alternatives section is **suppressed entirely** when
+    `result.alternatives` is empty — empties happen when the
+    candidate pool has only one model (e.g., after a `--provider`
+    + `--model` filter narrows to a single row). An empty
+    "Alternatives" header with nothing under it would be visual
+    noise.
+    """
+    # Label = `Provider / model`. The width is computed across the
+    # chosen row AND every alternative so the `$X.XXXX` cost column
+    # lines up vertically through the whole Recommendation +
+    # Alternatives block — same shared-width trick `spend` uses for
+    # its top-providers + top-models blocks.
+    chosen_label = _provider_display(result.provider) + " / " + result.model
+    alt_labels = [_provider_display(a.provider) + " / " + a.model for a in result.alternatives]
+    label_w = max(len(label) for label in [chosen_label, *alt_labels])
+
+    chosen_line = f"  {chosen_label.ljust(label_w)}  {_format_cost(result.estimated_cost_usd)}"
+    styled_chosen = (
+        click.style(chosen_line, fg="green", bold=True) if color_enabled else chosen_line
+    )
+
+    reasoning_lines = [
+        "  " + line for line in _wrap_paragraph(result.reasoning, _RECOMMEND_REASONING_WIDTH - 2)
+    ]
+    styled_reasoning = [_style(line, color_enabled, dim=True) for line in reasoning_lines]
+
+    blocks: list[str] = [
+        _section_label("Recommendation", color_enabled),
+        styled_chosen,
+    ]
+    if result.alternatives:
+        blocks.extend(_render_alternatives_block(result.alternatives, label_w, color_enabled))
+    blocks.extend(
+        [
+            "",
+            _section_label("Reasoning", color_enabled),
+            *styled_reasoning,
+        ]
+    )
+    return "\n".join(blocks)
+
+
+def _render_alternatives_block(
+    alternatives: list[Alternative], label_w: int, color_enabled: bool
+) -> list[str]:
+    """Lines for the Alternatives section. Caller decides whether to call it.
+
+    `label_w` is the shared label width across the Recommendation +
+    Alternatives blocks; padding each alternative's label to it keeps
+    the `$X.XXXX` cost column aligned vertically with the chosen row
+    above. Cost is not styled (default color); the chosen row above
+    is green, and the visual difference makes the chosen row pop
+    without needing color contrast on the runner-ups.
+    """
+    rows = [
+        f"  {(_provider_display(a.provider) + ' / ' + a.model).ljust(label_w)}  "
+        f"{_format_cost(a.estimated_cost_usd)}"
+        for a in alternatives
+    ]
+    return ["", _section_label("Alternatives", color_enabled), *rows]
+
+
+def _wrap_paragraph(text: str, width: int) -> list[str]:
+    """Greedy word-wrap a paragraph at `width` columns.
+
+    Uses `textwrap.wrap` rather than rolling our own — handles the
+    long-token edge case (a URL or model name longer than `width`)
+    by leaving the long token alone on its own line rather than
+    breaking it mid-character. `replace_whitespace=False` would let
+    the reasoning's em-dash and apostrophes survive intact, but the
+    default behavior is fine for our single-line input.
+    """
+    import textwrap
+
+    return textwrap.wrap(
+        text,
+        width=width,
+        break_long_words=False,
+        break_on_hyphens=False,
+    ) or [""]
+
+
 __all__ = [
     "format_compare_result",
     "format_providers",
+    "format_recommend_result",
     "format_spend_groups",
     "format_status",
     "format_usage_summary",

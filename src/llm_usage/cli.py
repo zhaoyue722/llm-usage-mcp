@@ -33,6 +33,7 @@ from llm_usage.capture.proxy import run_proxy
 from llm_usage.cli_render import (
     format_compare_result,
     format_providers,
+    format_recommend_result,
     format_spend_groups,
     format_status,
     format_usage_summary,
@@ -43,6 +44,7 @@ from llm_usage.core.db.session import get_session
 from llm_usage.core.diagnostics import collect_status
 from llm_usage.core.models import GroupBy, Period, SpendFilter
 from llm_usage.core.providers import collect_providers
+from llm_usage.core.recommend import recommend as _recommend_core
 from llm_usage.core.spend import aggregate_spend, period_window, summarize_usage
 
 app = typer.Typer(
@@ -106,10 +108,20 @@ def compare(
     ),
     models: list[str] | None = typer.Option(
         None,
-        "--models",
+        "--model",
         help=(
             "Restrict the comparison to these model names. Repeatable: "
-            "`--models a --models b`. Default: every priced model."
+            "`--model a --model b`. Default: every priced model."
+        ),
+    ),
+    show_all: bool = typer.Option(
+        False,
+        "--all",
+        help=(
+            "Show every catalog row, including alias/snapshot variants that "
+            "share a price (e.g., `gpt-5-mini` and `gpt-5-mini-2025-08-07`). "
+            "Default: collapse same-price same-family variants into one row "
+            "with ×N indicating the catalog count."
         ),
     ),
     json_output: bool = typer.Option(
@@ -135,7 +147,16 @@ def compare(
     Cheapest first, with `%` measured against the cheapest entry
     (cheapest = 100%). Cost is computed from input/output tokens only
     in v1; cache pricing is shown as a footnote so users know it's not
-    yet applied. `--json` returns the same Pydantic shape the MCP
+    yet applied.
+
+    Default view family-dedups catalog rows that share both a model-
+    family root AND an identical projected cost — so `gpt-5-mini` and
+    `gpt-5-mini-2025-08-07` (alias + pinned snapshot, same price)
+    collapse to one row with `×2`. Pass `--all` to see every catalog
+    row. When variants in the same family have *different* prices
+    (rare but happens), both rows appear regardless of `--all`.
+
+    `--json` returns the same Pydantic shape the MCP
     `compare_providers` tool produces, so existing schemas / consumers
     work verbatim.
     """
@@ -145,6 +166,7 @@ def compare(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             models=models if models else None,
+            include_snapshots=show_all,
         )
 
     if json_output:
@@ -165,6 +187,126 @@ def compare(
         # this flag follows the same decision. Without it, `--color always`
         # piped to a file (or captured by CliRunner) silently produces
         # plain text.
+        color=color_enabled,
+    )
+
+
+@app.command()
+def recommend(
+    task: str | None = typer.Option(
+        None,
+        "--task",
+        "-t",
+        help=(
+            "Optional free-form description. Echoed into the reasoning so the "
+            "output is grounded in your use case; doesn't drive selection (v1 "
+            "is cost-only). Omit it and the reasoning opens with 'Recommending'."
+        ),
+    ),
+    input_tokens: int | None = typer.Option(
+        None,
+        "--input",
+        "--in",
+        "-i",
+        help="Expected input tokens. Defaults to a nominal 1,000 (the reasoning flags the default).",
+    ),
+    output_tokens: int | None = typer.Option(
+        None,
+        "--output",
+        "--out",
+        "-o",
+        help="Expected output tokens. Defaults to a nominal 1,000.",
+    ),
+    budget_usd: float | None = typer.Option(
+        None,
+        "--budget",
+        "-b",
+        help="Max USD per call. When set, filters to affordable models; falls back to cheapest overall if nothing fits.",
+    ),
+    providers: list[str] | None = typer.Option(
+        None,
+        "--provider",
+        help=(
+            "Restrict to these providers. Repeatable: "
+            "`--provider openai --provider deepseek`. Default: every priced provider."
+        ),
+    ),
+    models: list[str] | None = typer.Option(
+        None,
+        "--model",
+        help=(
+            "Restrict to these model names. Repeatable: "
+            "`--model gpt-5-mini --model claude-sonnet-4-6`. Default: every priced model."
+        ),
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the same JSON the MCP `recommend_provider` tool returns. Pipe-friendly.",
+    ),
+    color: ColorMode = typer.Option(
+        ColorMode.auto,
+        "--color",
+        help="auto = color on TTY only (respects NO_COLOR); always = force on; never = force off.",
+    ),
+) -> None:
+    """Recommend the cheapest priced model for a workload + budget.
+
+    v1 ranks by cost only. `--task` is **optional** and only echoed
+    into the reasoning — it doesn't drive selection (the tool isn't
+    an LLM and can't interpret free text). A future release will
+    incorporate quality benchmarks via the `quality_snapshot` table,
+    at which point a populated `--task` becomes meaningful again.
+
+    `--in` / `--out` default to a nominal 1,000 / 1,000 each; the
+    reasoning flags the defaults so the caller knows the estimate is
+    rough. `--budget` filters to affordable models — if nothing fits,
+    falls back to the cheapest overall and the reasoning says so.
+
+    `--provider` and `--model` are optional whitelists, both
+    repeatable, AND-combine when used together
+    (`--provider openai --model gpt-5-mini --model gpt-5-nano` =
+    "of these two OpenAI models, which is cheapest"). Both apply
+    before `--budget`, so the over-budget fallback returns the
+    cheapest within the filter set rather than the cheapest priced
+    model overall.
+
+    `--json` returns the same Pydantic shape the MCP
+    `recommend_provider` tool produces, so existing schemas /
+    consumers work verbatim.
+    """
+    with get_session() as session:
+        try:
+            result = _recommend_core(
+                session,
+                task_description=task,
+                expected_input_tokens=input_tokens,
+                expected_output_tokens=output_tokens,
+                budget_usd=budget_usd,
+                providers=providers if providers else None,
+                models=models if models else None,
+                # CLI-specific flag names so the reasoning's "specify
+                # ___ for a precise estimate" advice points at the
+                # flags the user just used, not the MCP tool's
+                # Python parameter names.
+                tokens_flag_names=("--in", "--out"),
+            )
+        except ValueError as exc:
+            # Empty pricing snapshot, or whitelist matched nothing.
+            # Raise as a Typer abort with a clean exit code (1) rather
+            # than a stack trace — the message already tells the user
+            # what to do. The param_hint nudges them at the filter
+            # flags when those are the likely culprit.
+            hint = "--provider/--model" if (providers or models) else "--task"
+            raise typer.BadParameter(str(exc), param_hint=hint) from exc
+
+    if json_output:
+        typer.echo(json.dumps(result.model_dump(), indent=2))
+        return
+
+    color_enabled = _resolve_color(color)
+    typer.echo(
+        format_recommend_result(result, color_enabled=color_enabled),
         color=color_enabled,
     )
 
@@ -446,4 +588,4 @@ def proxy_main() -> None:
     standalone()
 
 
-__all__ = ["app", "compare", "main", "providers", "proxy", "proxy_main"]
+__all__ = ["app", "compare", "main", "providers", "proxy", "proxy_main", "recommend"]

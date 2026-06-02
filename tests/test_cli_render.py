@@ -14,17 +14,20 @@ import re
 from llm_usage.cli_render import (
     format_compare_result,
     format_providers,
+    format_recommend_result,
     format_spend_groups,
     format_status,
     format_usage_summary,
 )
 from llm_usage.core.models import (
+    Alternative,
     CompareProvidersResult,
     LargestCall,
     ProviderRow,
     ProvidersReport,
     QuerySpendResult,
     RankedEntry,
+    RecommendProviderResult,
     SpendGroup,
     StatusDatabase,
     StatusPricing,
@@ -253,6 +256,94 @@ def test_color_enabled_dims_header_divider_and_footnote() -> None:
     # data row (index 2) — not necessarily dim
     assert "2" in _extract_ansi_codes(lines[3])  # bottom divider
     assert "2" in _extract_ansi_codes(lines[4])  # footnote
+
+
+# --- ×N variant column ---------------------------------------------------
+
+
+def _ranked_with_variants(
+    *entries: tuple[str, str, float, float, int],
+) -> CompareProvidersResult:
+    """Like `_ranked` but each entry carries an explicit `variant_count`.
+
+    Tuple shape: (provider, model, cost_usd, relative_cost_pct, variant_count).
+    """
+    return CompareProvidersResult(
+        ranked=[
+            RankedEntry(
+                provider=p,
+                model=m,
+                cost_usd=c,
+                relative_cost_pct=pct,
+                notes=None,
+                variant_count=vc,
+            )
+            for p, m, c, pct, vc in entries
+        ]
+    )
+
+
+def test_variant_column_hidden_when_no_row_has_collapsed_variants() -> None:
+    """All rows at variant_count=1 → no `×N` column, no extra footer.
+    Default-on dedup with nothing actually collapsed must look identical
+    to the pre-dedup output for catalogs without alias-family clusters."""
+    result = _ranked_with_variants(
+        ("openai", "a", 0.001, 100.0, 1),
+        ("openai", "b", 0.002, 200.0, 1),
+    )
+    out = format_compare_result(result, input_tokens=100, output_tokens=100, color_enabled=False)
+    assert "×" not in out
+    assert "collapsed catalog variants" not in out
+
+
+def test_variant_column_renders_when_any_row_has_collapsed_variants() -> None:
+    """A single row at variant_count>1 should trigger the `×N` column
+    and the explanatory footer line."""
+    result = _ranked_with_variants(
+        ("qwen", "qwen-turbo", 0.0003, 100.0, 4),  # 4 catalog variants
+        ("deepseek", "deepseek-coder", 0.0004, 168.0, 1),  # solo
+    )
+    out = format_compare_result(result, input_tokens=100, output_tokens=100, color_enabled=False)
+    qwen_line = next(line for line in out.split("\n") if "qwen-turbo" in line)
+    deepseek_line = next(line for line in out.split("\n") if "deepseek-coder" in line)
+    assert "×4" in qwen_line
+    # Solo rows must NOT carry a ×1 marker — only the column padding.
+    assert "×" not in deepseek_line
+    # Footer note explaining the convention.
+    assert "×N indicates N collapsed catalog variants" in out
+
+
+def test_variant_column_aligns_x_marker_across_rows() -> None:
+    """When the count widths differ (×4 vs ×12), the right edge of the
+    column should align so the `×` characters stack vertically."""
+    result = _ranked_with_variants(
+        ("openai", "a", 0.001, 100.0, 4),
+        ("openai", "b", 0.002, 200.0, 12),
+    )
+    out = format_compare_result(result, input_tokens=100, output_tokens=100, color_enabled=False)
+    # Data rows are the ones with both a bar glyph AND the variant marker;
+    # the footer line carries `×N indicates...` but no bar.
+    data_lines = [line for line in out.split("\n") if "▅" in line and "×" in line]
+    # Both should end with the marker; compare from the right edge so
+    # the column is right-aligned.
+    assert len(data_lines) == 2
+    assert data_lines[0].rstrip().endswith("×4")
+    assert data_lines[1].rstrip().endswith("×12")
+    # Both lines must have the same total length once stripped.
+    plain_lines = [_ANSI_RE.sub("", line) for line in data_lines]
+    assert len(plain_lines[0]) == len(plain_lines[1])
+
+
+def test_variant_column_dim_when_color_enabled() -> None:
+    """`×N` text should carry the dim attribute (SGR 2), so it's
+    visually subordinate to the bar/cost/pct columns."""
+    result = _ranked_with_variants(
+        ("openai", "winner", 0.001, 100.0, 1),  # winner row (no dim needed)
+        ("openai", "other", 0.002, 200.0, 3),  # non-winner with variants
+    )
+    out = format_compare_result(result, input_tokens=100, output_tokens=100, color_enabled=True)
+    other_line = next(line for line in out.split("\n") if "other" in line)
+    assert "2" in _extract_ansi_codes(other_line)  # dim somewhere on the line
 
 
 # --- alignment: styled vs unstyled rows -----------------------------------
@@ -1255,3 +1346,207 @@ def test_providers_empty_report_renders_a_one_line_hint() -> None:
     out = format_providers(_providers_report(), color_enabled=False)
     assert "no known providers" in out
     assert "\n" not in out
+
+
+# --- format_recommend_result ---------------------------------------------
+
+
+def _recommend_result(
+    *,
+    provider: str = "qwen",
+    model: str = "qwen-flash",
+    cost: float = 0.0042,
+    alternatives: list[Alternative] | None = None,
+    reasoning: str = "For task 'anything': recommending qwen/qwen-flash.",
+) -> RecommendProviderResult:
+    return RecommendProviderResult(
+        provider=provider,
+        model=model,
+        estimated_cost_usd=cost,
+        alternatives=alternatives if alternatives is not None else [],
+        reasoning=reasoning,
+    )
+
+
+def _alt(provider: str, model: str, cost: float) -> Alternative:
+    return Alternative(provider=provider, model=model, estimated_cost_usd=cost)
+
+
+def test_recommend_renders_two_section_layout() -> None:
+    """The renderer should produce a `Recommendation` block, a blank
+    line, and a `Reasoning` block — readers should see the chosen
+    model before they encounter the paragraph."""
+    out = format_recommend_result(_recommend_result(), color_enabled=False)
+    lines = out.split("\n")
+    assert "Recommendation" in lines[0]
+    # The blank line separates the two sections; find the Reasoning
+    # label and check there's at least one empty line above it.
+    reasoning_idx = next(i for i, line in enumerate(lines) if "Reasoning" in line)
+    assert "" in lines[:reasoning_idx]
+
+
+def test_recommend_renders_branded_provider_name() -> None:
+    """`deepseek` → `DeepSeek` in the chosen-model row (same convention
+    as compare's leader row)."""
+    out = format_recommend_result(
+        _recommend_result(provider="deepseek", model="cheap-1"),
+        color_enabled=False,
+    )
+    chosen_row = next(line for line in out.split("\n") if "cheap-1" in line)
+    assert "DeepSeek" in chosen_row
+    # The lowercase form shouldn't appear as a row label.
+    assert "deepseek / cheap-1" not in chosen_row
+
+
+def test_recommend_renders_4dp_cost() -> None:
+    """`$0.0042` — 4 decimal places, matching `compare` and `spend`."""
+    out = format_recommend_result(
+        _recommend_result(cost=0.0042),
+        color_enabled=False,
+    )
+    assert "$0.0042" in out
+
+
+def test_recommend_word_wraps_long_reasoning_paragraph() -> None:
+    """A reasoning paragraph longer than the wrap width should be
+    split across multiple lines — the user shouldn't have to scroll
+    horizontally to read it."""
+    long_reasoning = (
+        "For task 'a very long description here that should wrap': "
+        "recommending qwen/qwen-flash — the cheapest projected cost "
+        "among 159 priced model(s). Estimated $0.0042 for the workload. "
+        "v1 ranks by cost only; task_description is echoed for context "
+        "but does not drive selection."
+    )
+    out = format_recommend_result(
+        _recommend_result(reasoning=long_reasoning),
+        color_enabled=False,
+    )
+    reasoning_lines = [line for line in out.split("\n") if line.startswith("  ")]
+    # At least two lines under either section (chosen row + reasoning
+    # paragraph wrapped onto multiple lines). The wrapped paragraph
+    # specifically must span >1 line.
+    paragraph_lines = [line for line in reasoning_lines if "qwen" in line.lower() or "v1" in line]
+    assert len(paragraph_lines) >= 2
+
+
+def test_recommend_color_disabled_emits_no_ansi() -> None:
+    out = format_recommend_result(_recommend_result(), color_enabled=False)
+    assert _ANSI_RE.search(out) is None
+
+
+def test_recommend_color_enabled_marks_section_labels_cyan() -> None:
+    out = format_recommend_result(_recommend_result(), color_enabled=True)
+    for label in ("Recommendation", "Reasoning"):
+        label_line = next(line for line in out.split("\n") if label in line)
+        assert "36" in _extract_ansi_codes(label_line)  # cyan
+        assert "1" in _extract_ansi_codes(label_line)  # bold
+
+
+def test_recommend_color_enabled_marks_chosen_row_green_and_bold() -> None:
+    """The chosen-model row gets the leader-row stripe (bold green) so
+    the user's eye lands there first."""
+    out = format_recommend_result(
+        _recommend_result(provider="qwen", model="qwen-flash"),
+        color_enabled=True,
+    )
+    chosen_row = next(line for line in out.split("\n") if "qwen-flash" in line)
+    assert "32" in _extract_ansi_codes(chosen_row)  # green
+    assert "1" in _extract_ansi_codes(chosen_row)  # bold
+
+
+def test_recommend_color_enabled_dims_the_reasoning_paragraph() -> None:
+    """Reasoning is informational and dimmed so it doesn't compete
+    with the chosen-row green."""
+    out = format_recommend_result(_recommend_result(), color_enabled=True)
+    # Find a reasoning line (it starts with two spaces, contains text from
+    # the paragraph, and is NOT the chosen row).
+    reasoning_idx = next(i for i, line in enumerate(out.split("\n")) if "Reasoning" in line)
+    paragraph_line = out.split("\n")[reasoning_idx + 1]
+    assert "2" in _extract_ansi_codes(paragraph_line)  # dim
+
+
+# --- recommend: alternatives block ---------------------------------------
+
+
+def test_recommend_renders_alternatives_block_when_non_empty() -> None:
+    """When the result has alternatives, the renderer must produce an
+    `Alternatives` section between Recommendation and Reasoning."""
+    out = format_recommend_result(
+        _recommend_result(
+            alternatives=[
+                _alt("deepseek", "deepseek-coder", 0.0004),
+                _alt("openai", "gpt-5-nano", 0.0004),
+            ],
+        ),
+        color_enabled=False,
+    )
+    lines = out.split("\n")
+    rec_idx = next(i for i, line in enumerate(lines) if "Recommendation" in line)
+    alt_idx = next(i for i, line in enumerate(lines) if "Alternatives" in line)
+    rea_idx = next(i for i, line in enumerate(lines) if "Reasoning" in line)
+    # Order: Recommendation < Alternatives < Reasoning.
+    assert rec_idx < alt_idx < rea_idx
+
+
+def test_recommend_renders_one_indented_row_per_alternative() -> None:
+    out = format_recommend_result(
+        _recommend_result(
+            alternatives=[
+                _alt("deepseek", "deepseek-coder", 0.0004),
+                _alt("openai", "gpt-5-nano", 0.0004),
+            ],
+        ),
+        color_enabled=False,
+    )
+    # Branded names + cost should appear in indented rows.
+    assert "  DeepSeek / deepseek-coder" in out
+    assert "  OpenAI / gpt-5-nano" in out
+    # Cost column shows 4dp like the chosen row.
+    assert out.count("$0.0004") == 2
+
+
+def test_recommend_suppresses_alternatives_block_when_empty() -> None:
+    """The constraint the user asked for: a single-option result must
+    not show an empty `Alternatives` header."""
+    out = format_recommend_result(_recommend_result(alternatives=[]), color_enabled=False)
+    assert "Alternatives" not in out
+    # Reasoning is still present.
+    assert "Reasoning" in out
+
+
+def test_recommend_aligns_alternative_cost_column() -> None:
+    """The `$X.XXXX` column should line up vertically across
+    alternative rows, regardless of provider/model name length."""
+    out = format_recommend_result(
+        _recommend_result(
+            alternatives=[
+                _alt("openai", "x", 0.0004),
+                _alt("anthropic", "this-is-a-much-longer-model-name", 0.0010),
+            ],
+        ),
+        color_enabled=False,
+    )
+    cost_lines = [line for line in out.split("\n") if line.startswith("  ") and "$" in line]
+    # All cost columns should start at the same offset.
+    offsets = [line.index("$") for line in cost_lines]
+    assert len(set(offsets)) == 1, f"costs misaligned: {offsets}"
+
+
+def test_recommend_color_enabled_keeps_chosen_row_green_and_alternatives_default() -> None:
+    """The chosen row should stay green/bold (leader-row convention);
+    alternatives stay in default color so the chosen row pops without
+    needing color contrast on the runner-ups."""
+    out = format_recommend_result(
+        _recommend_result(
+            provider="qwen",
+            model="qwen-flash",
+            alternatives=[_alt("deepseek", "deepseek-coder", 0.0004)],
+        ),
+        color_enabled=True,
+    )
+    chosen_line = next(line for line in out.split("\n") if "qwen-flash" in line)
+    alt_line = next(line for line in out.split("\n") if "deepseek-coder" in line)
+    assert "32" in _extract_ansi_codes(chosen_line)  # green
+    # Alternative row should not carry green foreground.
+    assert "32" not in _extract_ansi_codes(alt_line)

@@ -107,7 +107,7 @@ def test_compare_json_emits_compare_providers_result_shape(
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     # Same Pydantic shape the MCP tool returns: `ranked` array of entries
-    # with provider/model/cost_usd/relative_cost_pct/notes.
+    # with provider/model/cost_usd/relative_cost_pct/notes/variant_count.
     assert "ranked" in payload
     assert len(payload["ranked"]) == 3
     first = payload["ranked"][0]
@@ -117,10 +117,14 @@ def test_compare_json_emits_compare_providers_result_shape(
         "cost_usd",
         "relative_cost_pct",
         "notes",
+        "variant_count",
     }
     # Cheapest first.
     assert first["model"] == "cheap-1"
     assert first["relative_cost_pct"] == 100.0
+    # The controlled fixture has three distinct families (cheap-1, mid-1,
+    # premium-1), so default-dedup leaves every row at variant_count=1.
+    assert all(row["variant_count"] == 1 for row in payload["ranked"])
 
 
 def test_compare_json_output_has_no_ansi_escapes(priced_db: Path, runner: CliRunner) -> None:
@@ -136,7 +140,7 @@ def test_compare_json_output_has_no_ansi_escapes(priced_db: Path, runner: CliRun
     json.loads(result.stdout)
 
 
-# --- --models filter -------------------------------------------------------
+# --- --model filter -------------------------------------------------------
 
 
 def test_compare_models_filter_restricts_to_named_subset(
@@ -150,9 +154,9 @@ def test_compare_models_filter_restricts_to_named_subset(
             "100",
             "--out",
             "100",
-            "--models",
+            "--model",
             "cheap-1",
-            "--models",
+            "--model",
             "premium-1",
             "--json",
         ],
@@ -174,7 +178,7 @@ def test_compare_models_filter_with_no_match_returns_empty_ranked(
             "100",
             "--out",
             "100",
-            "--models",
+            "--model",
             "does-not-exist",
             "--json",
         ],
