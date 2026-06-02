@@ -65,6 +65,8 @@ _EXPECTED_TOOL_INPUTS: dict[str, set[str]] = {
         "expected_input_tokens",
         "expected_output_tokens",
         "budget_usd",
+        "providers",
+        "models",
     },
     "get_pricing": {"provider", "model"},
     "usage_summary": {"period", "include_failed"},

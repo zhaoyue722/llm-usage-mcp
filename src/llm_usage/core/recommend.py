@@ -63,15 +63,28 @@ def recommend(
     expected_input_tokens: int | None = None,
     expected_output_tokens: int | None = None,
     budget_usd: float | None = None,
+    providers: list[str] | None = None,
+    models: list[str] | None = None,
     tokens_flag_names: tuple[str, str] = _DEFAULT_TOKEN_FLAGS,
 ) -> RecommendProviderResult:
     """Pick the cheapest priced model that fits `budget_usd` (if any).
 
-    Raises `ValueError` when `pricing_snapshot` is empty — the result
-    schema's required fields can't be filled, and the caller's bug is
-    almost certainly "DB not bootstrapped" rather than a quirk of the
-    workload. The MCP and CLI wrappers translate this into their
-    respective error-presentation idioms.
+    `providers` and `models` are optional whitelists. Each is matched
+    against the corresponding field on a `pricing_snapshot` row; both
+    AND-combine when passed together (a candidate must be in both
+    lists). Unknown names silently filter to nothing — consistent with
+    the rest of the read surface ("unknown returns empty," not "unknown
+    is an error"). The budget filter runs *after* the whitelist, so an
+    over-budget fallback returns the cheapest within the whitelist
+    rather than the cheapest priced model overall.
+
+    Raises `ValueError` when:
+
+    - `pricing_snapshot` is empty (the DB hasn't been bootstrapped), or
+    - the `providers` / `models` filter leaves zero candidates.
+
+    The two error messages are distinguishable so the caller's
+    wrapper (MCP tool, CLI command) can surface a precise hint.
     """
     input_tokens = (
         expected_input_tokens if expected_input_tokens is not None else NOMINAL_INPUT_TOKENS
@@ -88,22 +101,29 @@ def recommend(
             "is the database bootstrapped? (`pricing_snapshot` is empty)"
         )
 
+    # Apply whitelist filters before the budget cut so an over-budget
+    # fallback returns the cheapest within the user's filter set, not
+    # the cheapest priced model overall.
+    candidates = _apply_filters(projected, providers=providers, models=models)
+    if not candidates:
+        raise ValueError(_no_candidates_message(providers, models))
+
     if budget_usd is not None:
-        affordable = [pair for pair in projected if nano_to_usd(pair[1]) <= budget_usd]
+        affordable = [pair for pair in candidates if nano_to_usd(pair[1]) <= budget_usd]
     else:
-        affordable = projected
+        affordable = candidates
     over_budget = budget_usd is not None and not affordable
 
-    # When over budget, fall back to the cheapest available overall —
-    # "your budget is too low, here's the closest" is more useful than
-    # raising. The reasoning makes the situation explicit.
-    chosen_pricing, chosen_cost_nano = (projected if over_budget else affordable)[0]
+    # Over budget: fall back to the cheapest among the filtered
+    # candidates. "Your budget is too low, here's the closest" is more
+    # useful than raising. The reasoning makes the situation explicit.
+    chosen_pricing, chosen_cost_nano = (candidates if over_budget else affordable)[0]
 
     reasoning = _build_reasoning(
         task_description=task_description,
         chosen_pricing=chosen_pricing,
         chosen_cost_nano=chosen_cost_nano,
-        pool_size=len(projected if over_budget else affordable),
+        pool_size=len(candidates if over_budget else affordable),
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         tokens_defaulted=tokens_defaulted,
@@ -116,6 +136,49 @@ def recommend(
         model=chosen_pricing.model,
         estimated_cost_usd=nano_to_usd(chosen_cost_nano),
         reasoning=reasoning,
+    )
+
+
+def _apply_filters(
+    projected: list[tuple[Pricing, int]],
+    *,
+    providers: list[str] | None,
+    models: list[str] | None,
+) -> list[tuple[Pricing, int]]:
+    """Whitelist filter on `projected` rows, AND-combining the two axes.
+
+    `None` on an axis means "don't filter on this axis" (vs an empty
+    list, which would filter to nothing — the caller shouldn't pass an
+    empty list, but if they do we honor it rather than silently
+    rewriting it to "no filter"). Builds sets once for O(1) lookup.
+    """
+    if providers is None and models is None:
+        return projected
+    provider_set = set(providers) if providers is not None else None
+    model_set = set(models) if models is not None else None
+    return [
+        pair
+        for pair in projected
+        if (provider_set is None or pair[0].provider in provider_set)
+        and (model_set is None or pair[0].model in model_set)
+    ]
+
+
+def _no_candidates_message(providers: list[str] | None, models: list[str] | None) -> str:
+    """Error message when the whitelist filter empties the candidate pool.
+
+    Lists exactly what was filtered so the caller can spot a typo'd
+    provider name or model name without re-reading their command.
+    """
+    parts: list[str] = []
+    if providers is not None:
+        parts.append(f"providers={sorted(set(providers))}")
+    if models is not None:
+        parts.append(f"models={sorted(set(models))}")
+    filter_repr = ", ".join(parts) if parts else "(no filters)"
+    return (
+        "no priced models match the recommend filter "
+        f"({filter_repr}); check spelling or widen the filter."
     )
 
 

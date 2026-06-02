@@ -108,10 +108,10 @@ def compare(
     ),
     models: list[str] | None = typer.Option(
         None,
-        "--models",
+        "--model",
         help=(
             "Restrict the comparison to these model names. Repeatable: "
-            "`--models a --models b`. Default: every priced model."
+            "`--model a --model b`. Default: every priced model."
         ),
     ),
     json_output: bool = typer.Option(
@@ -199,6 +199,22 @@ def recommend(
         "-b",
         help="Max USD per call. When set, filters to affordable models; falls back to cheapest overall if nothing fits.",
     ),
+    providers: list[str] | None = typer.Option(
+        None,
+        "--provider",
+        help=(
+            "Restrict to these providers. Repeatable: "
+            "`--provider openai --provider deepseek`. Default: every priced provider."
+        ),
+    ),
+    models: list[str] | None = typer.Option(
+        None,
+        "--model",
+        help=(
+            "Restrict to these model names. Repeatable: "
+            "`--model gpt-5-mini --model claude-sonnet-4-6`. Default: every priced model."
+        ),
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -223,6 +239,14 @@ def recommend(
     rough. `--budget` filters to affordable models — if nothing fits,
     falls back to the cheapest overall and the reasoning says so.
 
+    `--provider` and `--model` are optional whitelists, both
+    repeatable, AND-combine when used together
+    (`--provider openai --model gpt-5-mini --model gpt-5-nano` =
+    "of these two OpenAI models, which is cheapest"). Both apply
+    before `--budget`, so the over-budget fallback returns the
+    cheapest within the filter set rather than the cheapest priced
+    model overall.
+
     `--json` returns the same Pydantic shape the MCP
     `recommend_provider` tool produces, so existing schemas /
     consumers work verbatim.
@@ -235,6 +259,8 @@ def recommend(
                 expected_input_tokens=input_tokens,
                 expected_output_tokens=output_tokens,
                 budget_usd=budget_usd,
+                providers=providers if providers else None,
+                models=models if models else None,
                 # CLI-specific flag names so the reasoning's "specify
                 # ___ for a precise estimate" advice points at the
                 # flags the user just used, not the MCP tool's
@@ -242,10 +268,13 @@ def recommend(
                 tokens_flag_names=("--in", "--out"),
             )
         except ValueError as exc:
-            # Empty pricing snapshot. Raise as a Typer abort with a
-            # clean exit code (1) rather than a stack trace — the
-            # message already tells the user what to do.
-            raise typer.BadParameter(str(exc), param_hint="--task") from exc
+            # Empty pricing snapshot, or whitelist matched nothing.
+            # Raise as a Typer abort with a clean exit code (1) rather
+            # than a stack trace — the message already tells the user
+            # what to do. The param_hint nudges them at the filter
+            # flags when those are the likely culprit.
+            hint = "--provider/--model" if (providers or models) else "--task"
+            raise typer.BadParameter(str(exc), param_hint=hint) from exc
 
     if json_output:
         typer.echo(json.dumps(result.model_dump(), indent=2))

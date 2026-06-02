@@ -202,3 +202,148 @@ def test_recommend_custom_flag_names_only_appear_when_defaults_triggered(
         )
     assert "--in" not in r.reasoning
     assert "--out" not in r.reasoning
+
+
+# --- providers / models filter ------------------------------------------
+
+
+def test_recommend_providers_filter_restricts_to_named_providers(
+    priced_db: Path,
+) -> None:
+    """`providers=["openai"]` excludes cheap-1 (deepseek) and premium-1
+    (anthropic), leaving only mid-1 (openai) — so mid-1 wins despite
+    not being the cheapest overall."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            providers=["openai"],
+        )
+    assert (r.provider, r.model) == ("openai", "mid-1")
+
+
+def test_recommend_models_filter_restricts_to_named_models(priced_db: Path) -> None:
+    """`models=["mid-1", "premium-1"]` excludes cheap-1, leaving mid-1
+    and premium-1 — so mid-1 wins as the cheaper of the two."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            models=["mid-1", "premium-1"],
+        )
+    assert (r.provider, r.model) == ("openai", "mid-1")
+
+
+def test_recommend_provider_and_model_filters_and_combine(priced_db: Path) -> None:
+    """Both filters together: only rows in both whitelists qualify.
+    `providers=["openai"]` + `models=["mid-1", "cheap-1"]` keeps only
+    openai/mid-1 (cheap-1 is deepseek, filtered by providers)."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            providers=["openai"],
+            models=["mid-1", "cheap-1"],
+        )
+    assert (r.provider, r.model) == ("openai", "mid-1")
+
+
+def test_recommend_filters_apply_before_budget_check(priced_db: Path) -> None:
+    """A budget that's over premium-1's $15 but under any cheaper model
+    — combined with `providers=["anthropic"]` — should hit the
+    over-budget fallback within anthropic, not silently fall back to
+    cheap-1 (which is filtered out)."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            providers=["anthropic"],
+            budget_usd=10.0,
+        )
+    # anthropic/premium-1 is over-budget ($15 > $10) but it's the only
+    # candidate after the provider filter — fallback to it.
+    assert (r.provider, r.model) == ("anthropic", "premium-1")
+    assert "no priced model fits" in r.reasoning
+
+
+def test_recommend_empty_filter_match_raises_specific_error(
+    priced_db: Path,
+) -> None:
+    """A whitelist that names something not in the catalog raises a
+    distinct error mentioning the filter — so a typo doesn't manifest
+    as the misleading 'database not bootstrapped' message."""
+    with (
+        get_session() as session,
+        pytest.raises(ValueError, match="no priced models match the recommend filter"),
+    ):
+        recommend(
+            session,
+            task_description="anything",
+            providers=["does-not-exist"],
+        )
+
+
+def test_recommend_empty_provider_filter_error_lists_filter_contents(
+    priced_db: Path,
+) -> None:
+    """The no-match error should echo the failing filter's contents so
+    the user can spot a typo at a glance."""
+    with get_session() as session, pytest.raises(ValueError) as excinfo:
+        recommend(
+            session,
+            task_description="anything",
+            providers=["typoed-name"],
+            models=["also-typoed"],
+        )
+    msg = str(excinfo.value)
+    assert "typoed-name" in msg
+    assert "also-typoed" in msg
+
+
+def test_recommend_unknown_names_dont_raise_when_other_matches_exist(
+    priced_db: Path,
+) -> None:
+    """Mixed lists with one real and one bogus name should still pick
+    the real one — symmetric with `get_pricing`'s 'unknown returns
+    empty' behavior. The filter narrows to {bogus, real} ∩ catalog =
+    {real}, which is non-empty."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            models=["cheap-1", "does-not-exist"],
+        )
+    assert (r.provider, r.model) == ("deepseek", "cheap-1")
+
+
+def test_recommend_none_filters_behave_like_no_filter(priced_db: Path) -> None:
+    """`providers=None` and `models=None` (the defaults) should leave
+    the candidate pool untouched — backward compatible with the pre-
+    filter behavior."""
+    with get_session() as session:
+        unfiltered = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+        )
+        nones = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            providers=None,
+            models=None,
+        )
+    assert (unfiltered.provider, unfiltered.model) == (nones.provider, nones.model)
+    assert unfiltered.estimated_cost_usd == nones.estimated_cost_usd

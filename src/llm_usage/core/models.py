@@ -146,6 +146,12 @@ class RecommendProviderParams(ParamsBase):
     expected_input_tokens: int | None = None
     expected_output_tokens: int | None = None
     budget_usd: float | None = None
+    # Optional whitelist filters. None = no filter on that axis.
+    # Both AND-combine; budget applies after the whitelist (so an
+    # over-budget fallback returns the cheapest within the filter
+    # set, not the cheapest priced model overall).
+    providers: list[str] | None = None
+    models: list[str] | None = None
 
 
 class RecommendProviderResult(ResultBase):

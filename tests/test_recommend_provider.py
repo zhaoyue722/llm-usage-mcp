@@ -64,6 +64,8 @@ def _recommend(
     expected_input_tokens: int | None = 1_000_000,
     expected_output_tokens: int | None = 1_000_000,
     budget_usd: float | None = None,
+    providers: list[str] | None = None,
+    models: list[str] | None = None,
 ) -> RecommendProviderResult:
     # `@server.tool()` erases the return type for mypy; pin it back.
     result: RecommendProviderResult = asyncio.run(
@@ -72,6 +74,8 @@ def _recommend(
             expected_input_tokens=expected_input_tokens,
             expected_output_tokens=expected_output_tokens,
             budget_usd=budget_usd,
+            providers=providers,
+            models=models,
         )
     )
     return result
@@ -174,3 +178,27 @@ def test_single_priced_model_is_always_picked(
     # Same answer when over-budget falls back to cheapest.
     r2 = _recommend(budget_usd=0.0001)
     assert (r2.provider, r2.model) == ("openai", "mid-1")
+
+
+# --- providers / models filters (MCP surface) ---------------------------
+
+
+def test_providers_filter_passes_through_mcp_tool(priced_db: Path) -> None:
+    """The new `providers` param should reach `core/recommend.recommend`
+    and reshape the winner — pins the MCP-tool plumbing."""
+    r = _recommend(providers=["openai"])
+    assert (r.provider, r.model) == ("openai", "mid-1")
+
+
+def test_models_filter_passes_through_mcp_tool(priced_db: Path) -> None:
+    """Symmetric pin for the `models` param on the MCP tool."""
+    r = _recommend(models=["mid-1", "premium-1"])
+    assert (r.provider, r.model) == ("openai", "mid-1")
+
+
+def test_filter_with_no_match_raises_via_mcp(priced_db: Path) -> None:
+    """The no-match error should bubble through the async tool wrapper
+    as a plain `ValueError` — MCP clients get a structured error
+    rather than a fabricated result."""
+    with pytest.raises(ValueError, match="no priced models match"):
+        _recommend(providers=["typo"])

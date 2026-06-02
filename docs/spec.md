@@ -286,12 +286,26 @@ parameters:
   expected_input_tokens:  integer optional
   expected_output_tokens: integer optional
   budget_usd:        number optional
+  providers:         string[] optional   # restrict to these providers
+  models:            string[] optional   # restrict to these model names
 returns:
   provider:          string
   model:             string
   estimated_cost_usd: number
   reasoning:         string          # natural-language explanation
 ```
+
+> **v1 implementation notes.**
+> - `providers` and `models` are whitelists; both AND-combine when
+>   passed together (a candidate must be in both lists). Each accepts
+>   a non-empty list; omit the field entirely for "no filter on this
+>   axis." Unknown names in either list silently filter to nothing
+>   from that name (no error) — consistent with `get_pricing`'s
+>   "unknown returns empty" semantics. If the combined filter leaves
+>   zero candidates, the tool raises rather than fabricating a result.
+> - `budget_usd` is applied *after* the provider/model filters, so an
+>   over-budget fallback picks the cheapest candidate **within the
+>   filter set**, not the cheapest priced model overall.
 
 > **v1 scope note.** The original signature accepted a
 > `quality_priority` axis (`"lowest_cost" | "balanced" | "highest_quality"`)

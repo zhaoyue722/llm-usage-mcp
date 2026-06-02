@@ -136,7 +136,7 @@ def test_compare_json_output_has_no_ansi_escapes(priced_db: Path, runner: CliRun
     json.loads(result.stdout)
 
 
-# --- --models filter -------------------------------------------------------
+# --- --model filter -------------------------------------------------------
 
 
 def test_compare_models_filter_restricts_to_named_subset(
@@ -150,9 +150,9 @@ def test_compare_models_filter_restricts_to_named_subset(
             "100",
             "--out",
             "100",
-            "--models",
+            "--model",
             "cheap-1",
-            "--models",
+            "--model",
             "premium-1",
             "--json",
         ],
@@ -174,7 +174,7 @@ def test_compare_models_filter_with_no_match_returns_empty_ranked(
             "100",
             "--out",
             "100",
-            "--models",
+            "--model",
             "does-not-exist",
             "--json",
         ],

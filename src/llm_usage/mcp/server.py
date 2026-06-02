@@ -243,6 +243,8 @@ async def recommend_provider(
     expected_input_tokens: int | None = None,
     expected_output_tokens: int | None = None,
     budget_usd: float | None = None,
+    providers: list[str] | None = None,
+    models: list[str] | None = None,
 ) -> RecommendProviderResult:
     """Recommend the cheapest priced model that fits the workload + budget.
 
@@ -258,6 +260,14 @@ async def recommend_provider(
     that exceed it — if nothing fits, falls back to the cheapest model
     overall (the result fields are required, so there's no "no match"
     return shape) and the `reasoning` says so plainly.
+
+    `providers` / `models` are optional whitelists (AND-combine when
+    both passed). Both are applied before the budget cut, so an over-
+    budget fallback returns the cheapest within the filter set rather
+    than the cheapest priced model overall. A whitelist that matches
+    nothing raises rather than fabricating a result — likely a
+    spelling error in the caller's name list.
+
     `task_description` is echoed into the reasoning but does not drive
     selection — the tool isn't an LLM and can't interpret free text.
     """
@@ -268,6 +278,8 @@ async def recommend_provider(
             expected_input_tokens=expected_input_tokens,
             expected_output_tokens=expected_output_tokens,
             budget_usd=budget_usd,
+            providers=providers,
+            models=models,
         )
 
 

@@ -252,3 +252,174 @@ def test_recommend_color_auto_disables_on_non_tty(priced_db: Path, runner: CliRu
     result = runner.invoke(app, ["recommend", "-t", "anything"])
     assert result.exit_code == 0
     assert _ANSI_RE.search(result.stdout) is None
+
+
+# --- --provider / --model filters ---------------------------------------
+
+
+def test_recommend_provider_filter_changes_winner(priced_db: Path, runner: CliRunner) -> None:
+    """Without filters cheap-1 (deepseek) wins. `--provider openai`
+    should pivot to mid-1 — exercises the filter path from CLI to core."""
+    result = runner.invoke(
+        app,
+        [
+            "recommend",
+            "-t",
+            "anything",
+            "-i",
+            "1000000",
+            "-o",
+            "1000000",
+            "--provider",
+            "openai",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["provider"] == "openai"
+    assert payload["model"] == "mid-1"
+
+
+def test_recommend_provider_flag_is_repeatable(priced_db: Path, runner: CliRunner) -> None:
+    """`--provider openai --provider deepseek` should keep both pools'
+    candidates; cheap-1 (deepseek) is still cheapest of the two."""
+    result = runner.invoke(
+        app,
+        [
+            "recommend",
+            "-t",
+            "anything",
+            "-i",
+            "1000000",
+            "-o",
+            "1000000",
+            "--provider",
+            "openai",
+            "--provider",
+            "deepseek",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert (payload["provider"], payload["model"]) == ("deepseek", "cheap-1")
+
+
+def test_recommend_model_filter_changes_winner(priced_db: Path, runner: CliRunner) -> None:
+    """`--model mid-1 --model premium-1` excludes cheap-1; mid-1 wins."""
+    result = runner.invoke(
+        app,
+        [
+            "recommend",
+            "-t",
+            "anything",
+            "-i",
+            "1000000",
+            "-o",
+            "1000000",
+            "--model",
+            "mid-1",
+            "--model",
+            "premium-1",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert (payload["provider"], payload["model"]) == ("openai", "mid-1")
+
+
+def test_recommend_provider_and_model_filters_and_combine(
+    priced_db: Path, runner: CliRunner
+) -> None:
+    """Both filters AND-combine. `--provider openai --model mid-1
+    --model cheap-1` should pick openai/mid-1 (cheap-1 is deepseek,
+    filtered out by --provider)."""
+    result = runner.invoke(
+        app,
+        [
+            "recommend",
+            "-t",
+            "anything",
+            "-i",
+            "1000000",
+            "-o",
+            "1000000",
+            "--provider",
+            "openai",
+            "--model",
+            "mid-1",
+            "--model",
+            "cheap-1",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert (payload["provider"], payload["model"]) == ("openai", "mid-1")
+
+
+def _normalize(text: str) -> str:
+    """Strip ANSI escapes + box borders and collapse whitespace.
+
+    Rich word-wraps long messages inside its `╭─ Error ─╮` box, so a
+    multi-word phrase like "no priced models match the recommend
+    filter" can be split across two visible lines, each prefixed and
+    suffixed with `│`. After stripping ANSI, we also drop the box
+    border glyphs so the substring "recommend filter" doesn't get
+    interrupted by `│ │` when the wrap happens to land between the
+    two words.
+    """
+    plain = _ANSI_RE.sub("", text)
+    # Box-drawing glyphs Rich uses for the error frame: ╭ ╮ ╯ ╰ ─ │
+    for glyph in "╭╮╯╰─│":
+        plain = plain.replace(glyph, " ")
+    return " ".join(plain.split())
+
+
+def test_recommend_filter_with_no_match_exits_non_zero_with_filter_hint(
+    priced_db: Path, runner: CliRunner
+) -> None:
+    """A whitelist that matches nothing should fail cleanly, nudging
+    the user at `--provider/--model` rather than `--task` so a typo
+    is obvious."""
+    result = runner.invoke(
+        app,
+        [
+            "recommend",
+            "-t",
+            "anything",
+            "--provider",
+            "no-such-provider",
+            "--color",
+            "never",
+        ],
+    )
+    assert result.exit_code != 0
+    plain = _normalize(result.stdout + result.output)
+    assert "no priced models match the recommend filter" in plain
+    # The param hint should point at the filter flags, not --task.
+    assert "--provider" in plain or "--model" in plain
+
+
+def test_recommend_filter_error_echoes_user_filter_values(
+    priced_db: Path, runner: CliRunner
+) -> None:
+    """The error should print the failing filter contents so the user
+    can spot a typo without re-reading their command."""
+    result = runner.invoke(
+        app,
+        [
+            "recommend",
+            "-t",
+            "anything",
+            "--model",
+            "typo-model-name",
+            "--color",
+            "never",
+        ],
+    )
+    assert result.exit_code != 0
+    plain = _normalize(result.stdout + result.output)
+    assert "typo-model-name" in plain
