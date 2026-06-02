@@ -150,16 +150,28 @@ def _apply_filters(
     `None` on an axis means "don't filter on this axis" (vs an empty
     list, which would filter to nothing — the caller shouldn't pass an
     empty list, but if they do we honor it rather than silently
-    rewriting it to "no filter"). Builds sets once for O(1) lookup.
+    rewriting it to "no filter").
+
+    Provider matching is **case-insensitive**: provider names are a
+    closed set with a well-known canonical case (lowercase in the DB,
+    branded in display — `Qwen`, `DeepSeek`, `OpenAI`, `Anthropic`).
+    A user typing the branded form they see in the output (`Qwen`)
+    should match against the DB's lowercase row (`qwen`) without
+    surprise.
+
+    Model matching stays case-sensitive: model names are open catalog
+    literals (e.g. `gpt-5-nano`, `claude-opus-4-7`), and case-folding
+    them risks colliding two distinct catalog entries that differ
+    only by case — unlikely with LiteLLM today, but the safer default.
     """
     if providers is None and models is None:
         return projected
-    provider_set = set(providers) if providers is not None else None
+    provider_set = {name.lower() for name in providers} if providers is not None else None
     model_set = set(models) if models is not None else None
     return [
         pair
         for pair in projected
-        if (provider_set is None or pair[0].provider in provider_set)
+        if (provider_set is None or pair[0].provider.lower() in provider_set)
         and (model_set is None or pair[0].model in model_set)
     ]
 

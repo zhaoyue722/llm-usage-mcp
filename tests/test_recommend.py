@@ -347,3 +347,45 @@ def test_recommend_none_filters_behave_like_no_filter(priced_db: Path) -> None:
         )
     assert (unfiltered.provider, unfiltered.model) == (nones.provider, nones.model)
     assert unfiltered.estimated_cost_usd == nones.estimated_cost_usd
+
+
+def test_recommend_provider_filter_is_case_insensitive(priced_db: Path) -> None:
+    """Provider names have a well-known canonical case (lowercase in
+    DB, branded in display). A user typing the branded form they
+    see in output (`OpenAI`) should match the lowercase DB row
+    (`openai`) — case sensitivity here is a UX trap, not a feature.
+
+    Pins the branded-form input behavior for the four v1 providers,
+    plus the lowercase form to confirm both still work.
+    """
+    branded_inputs = ["Anthropic", "OpenAI", "DeepSeek", "openai"]
+    for name in branded_inputs:
+        with get_session() as session:
+            r = recommend(
+                session,
+                task_description="anything",
+                expected_input_tokens=1_000_000,
+                expected_output_tokens=1_000_000,
+                providers=[name],
+            )
+        # Every branded form should resolve to a real model from that
+        # provider — exact pick depends on the fixture's cheapest
+        # within each provider, but the provider lowercase should
+        # always be the right one.
+        assert r.provider == name.lower(), f"case-insensitive lookup failed for {name!r}"
+
+
+def test_recommend_model_filter_stays_case_sensitive(priced_db: Path) -> None:
+    """Model names are open catalog literals. Case-folding them risks
+    colliding two distinct entries that differ only by case (unlikely
+    with LiteLLM today, but the safer default). Pins the strict-match
+    behavior so it doesn't silently drift to case-insensitive.
+    """
+    with get_session() as session, pytest.raises(
+        ValueError, match="no priced models match the recommend filter"
+    ):
+        recommend(
+            session,
+            task_description="anything",
+            models=["CHEAP-1"],  # the fixture row is `cheap-1` lowercase
+        )
