@@ -34,7 +34,7 @@ from typing import Final
 
 from sqlalchemy.orm import Session
 
-from llm_usage.core.models import RecommendProviderResult
+from llm_usage.core.models import Alternative, RecommendProviderResult
 from llm_usage.core.pricing import CostCalculator, Pricing, all_pricing, nano_to_usd
 
 # Workload assumed when the caller doesn't pass `expected_input_tokens`
@@ -45,6 +45,13 @@ from llm_usage.core.pricing import CostCalculator, Pricing, all_pricing, nano_to
 # knows the estimate is nominal.
 NOMINAL_INPUT_TOKENS: Final[int] = 1_000
 NOMINAL_OUTPUT_TOKENS: Final[int] = 1_000
+
+# How many runner-up candidates to surface as `alternatives` on the
+# result. Two so the user sees 3 total options (chosen + 2 runner-ups)
+# — matches the "top-3" pattern in `usage_summary` and is the canonical
+# small-N humans handle well without scanning. Empty alternatives when
+# the candidate pool has only one element.
+_DEFAULT_ALTERNATIVES_COUNT: Final[int] = 2
 
 # Default flag-name pair used in the `reasoning` template when the
 # caller doesn't override it. Matches the MCP tool's parameter names.
@@ -117,13 +124,26 @@ def recommend(
     # Over budget: fall back to the cheapest among the filtered
     # candidates. "Your budget is too low, here's the closest" is more
     # useful than raising. The reasoning makes the situation explicit.
-    chosen_pricing, chosen_cost_nano = (candidates if over_budget else affordable)[0]
+    pool = candidates if over_budget else affordable
+    chosen_pricing, chosen_cost_nano = pool[0]
+    # Take the next-cheapest entries from the *same pool* the chosen
+    # row came from, so alternatives don't contradict the filter or
+    # the budget fallback. Empty list when there's only one element
+    # — the renderer uses this as a signal to skip the section.
+    alternatives = [
+        Alternative(
+            provider=p.provider,
+            model=p.model,
+            estimated_cost_usd=nano_to_usd(cost_nano),
+        )
+        for p, cost_nano in pool[1 : 1 + _DEFAULT_ALTERNATIVES_COUNT]
+    ]
 
     reasoning = _build_reasoning(
         task_description=task_description,
         chosen_pricing=chosen_pricing,
         chosen_cost_nano=chosen_cost_nano,
-        pool_size=len(candidates if over_budget else affordable),
+        pool_size=len(pool),
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         tokens_defaulted=tokens_defaulted,
@@ -135,6 +155,7 @@ def recommend(
         provider=chosen_pricing.provider,
         model=chosen_pricing.model,
         estimated_cost_usd=nano_to_usd(chosen_cost_nano),
+        alternatives=alternatives,
         reasoning=reasoning,
     )
 

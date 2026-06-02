@@ -75,6 +75,7 @@ from typing import Final
 import click
 
 from llm_usage.core.models import (
+    Alternative,
     CompareProvidersResult,
     GroupBy,
     LargestCall,
@@ -1096,14 +1097,29 @@ def format_recommend_result(
     """Render `recommend`'s result for terminal display. Returns one string.
 
     Layout: `Recommendation` block (chosen provider / model + cost) →
-    blank line → `Reasoning` block (word-wrapped paragraph). The
-    chosen row is green to match the leader-row convention from
-    `compare` and `spend`; the reasoning is dim because it's
-    informational and the user's eye should land on the chosen row
-    first.
+    `Alternatives` block (top-N runner-ups, only when non-empty) →
+    `Reasoning` block (word-wrapped paragraph). The chosen row is
+    green to match the leader-row convention from `compare` and
+    `spend`; alternatives sit underneath in default color (informative
+    but not competing for attention); the reasoning is dim.
+
+    The Alternatives section is **suppressed entirely** when
+    `result.alternatives` is empty — empties happen when the
+    candidate pool has only one model (e.g., after a `--provider`
+    + `--model` filter narrows to a single row). An empty
+    "Alternatives" header with nothing under it would be visual
+    noise.
     """
-    provider = _provider_display(result.provider)
-    chosen_line = f"  {provider} / {result.model}  {_format_cost(result.estimated_cost_usd)}"
+    # Label = `Provider / model`. The width is computed across the
+    # chosen row AND every alternative so the `$X.XXXX` cost column
+    # lines up vertically through the whole Recommendation +
+    # Alternatives block — same shared-width trick `spend` uses for
+    # its top-providers + top-models blocks.
+    chosen_label = _provider_display(result.provider) + " / " + result.model
+    alt_labels = [_provider_display(a.provider) + " / " + a.model for a in result.alternatives]
+    label_w = max(len(label) for label in [chosen_label, *alt_labels])
+
+    chosen_line = f"  {chosen_label.ljust(label_w)}  {_format_cost(result.estimated_cost_usd)}"
     styled_chosen = (
         click.style(chosen_line, fg="green", bold=True) if color_enabled else chosen_line
     )
@@ -1116,11 +1132,37 @@ def format_recommend_result(
     blocks: list[str] = [
         _section_label("Recommendation", color_enabled),
         styled_chosen,
-        "",
-        _section_label("Reasoning", color_enabled),
-        *styled_reasoning,
     ]
+    if result.alternatives:
+        blocks.extend(_render_alternatives_block(result.alternatives, label_w, color_enabled))
+    blocks.extend(
+        [
+            "",
+            _section_label("Reasoning", color_enabled),
+            *styled_reasoning,
+        ]
+    )
     return "\n".join(blocks)
+
+
+def _render_alternatives_block(
+    alternatives: list[Alternative], label_w: int, color_enabled: bool
+) -> list[str]:
+    """Lines for the Alternatives section. Caller decides whether to call it.
+
+    `label_w` is the shared label width across the Recommendation +
+    Alternatives blocks; padding each alternative's label to it keeps
+    the `$X.XXXX` cost column aligned vertically with the chosen row
+    above. Cost is not styled (default color); the chosen row above
+    is green, and the visual difference makes the chosen row pop
+    without needing color contrast on the runner-ups.
+    """
+    rows = [
+        f"  {(_provider_display(a.provider) + ' / ' + a.model).ljust(label_w)}  "
+        f"{_format_cost(a.estimated_cost_usd)}"
+        for a in alternatives
+    ]
+    return ["", _section_label("Alternatives", color_enabled), *rows]
 
 
 def _wrap_paragraph(text: str, width: int) -> list[str]:

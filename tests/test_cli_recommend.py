@@ -218,11 +218,17 @@ def test_recommend_json_emits_full_result_shape(priced_db: Path, runner: CliRunn
         "provider",
         "model",
         "estimated_cost_usd",
+        "alternatives",
         "reasoning",
     }
     assert payload["provider"] == "deepseek"
     assert payload["model"] == "cheap-1"
     assert payload["estimated_cost_usd"] == 3.0
+    # The two runner-ups in the controlled fixture, cost-ascending.
+    assert [(a["provider"], a["model"]) for a in payload["alternatives"]] == [
+        ("openai", "mid-1"),
+        ("anthropic", "premium-1"),
+    ]
 
 
 def test_recommend_json_no_ansi_even_with_color_always(priced_db: Path, runner: CliRunner) -> None:
@@ -423,3 +429,59 @@ def test_recommend_filter_error_echoes_user_filter_values(
     assert result.exit_code != 0
     plain = _normalize(result.stdout + result.output)
     assert "typo-model-name" in plain
+
+
+# --- alternatives in the human view -------------------------------------
+
+
+def test_recommend_human_output_shows_alternatives_block(
+    priced_db: Path, runner: CliRunner
+) -> None:
+    """Default CLI run should show the chosen row plus the two
+    runner-ups as a block — the new user-facing behavior."""
+    result = runner.invoke(
+        app,
+        [
+            "recommend",
+            "-t",
+            "anything",
+            "-i",
+            "1000000",
+            "-o",
+            "1000000",
+            "--color",
+            "never",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "Alternatives" in result.stdout
+    # The two non-chosen models in the controlled fixture appear in
+    # the Alternatives block.
+    assert "OpenAI / mid-1" in result.stdout
+    assert "Anthropic / premium-1" in result.stdout
+
+
+def test_recommend_human_output_omits_alternatives_when_pool_is_one(
+    priced_db: Path, runner: CliRunner
+) -> None:
+    """When `--model` narrows to a single match, the alternatives
+    section is skipped — no empty `Alternatives` header."""
+    result = runner.invoke(
+        app,
+        [
+            "recommend",
+            "-t",
+            "anything",
+            "-i",
+            "1000000",
+            "-o",
+            "1000000",
+            "--model",
+            "cheap-1",
+            "--color",
+            "never",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "Alternatives" not in result.stdout
+    assert "Reasoning" in result.stdout  # other sections still render

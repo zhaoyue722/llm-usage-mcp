@@ -381,11 +381,149 @@ def test_recommend_model_filter_stays_case_sensitive(priced_db: Path) -> None:
     with LiteLLM today, but the safer default). Pins the strict-match
     behavior so it doesn't silently drift to case-insensitive.
     """
-    with get_session() as session, pytest.raises(
-        ValueError, match="no priced models match the recommend filter"
+    with (
+        get_session() as session,
+        pytest.raises(ValueError, match="no priced models match the recommend filter"),
     ):
         recommend(
             session,
             task_description="anything",
             models=["CHEAP-1"],  # the fixture row is `cheap-1` lowercase
         )
+
+
+# --- alternatives -------------------------------------------------------
+
+
+def test_recommend_alternatives_carry_top_two_runner_ups(priced_db: Path) -> None:
+    """With three priced models in the fixture, the chosen row is
+    cheap-1 and the alternatives are mid-1, premium-1 (cost-asc)."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+        )
+    assert (r.provider, r.model) == ("deepseek", "cheap-1")
+    assert [(a.provider, a.model) for a in r.alternatives] == [
+        ("openai", "mid-1"),
+        ("anthropic", "premium-1"),
+    ]
+    # Costs scale with the rates: mid-1 $6, premium-1 $15.
+    assert r.alternatives[0].estimated_cost_usd == pytest.approx(6.0)
+    assert r.alternatives[1].estimated_cost_usd == pytest.approx(15.0)
+
+
+def test_recommend_alternatives_exclude_the_chosen_row(priced_db: Path) -> None:
+    """The chosen row must not also appear in alternatives — every
+    entry in `alternatives` is strictly distinct from `(provider,
+    model)` on the result."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+        )
+    chosen = (r.provider, r.model)
+    for alt in r.alternatives:
+        assert (alt.provider, alt.model) != chosen
+
+
+def test_recommend_alternatives_empty_when_pool_has_one_model(
+    priced_db: Path,
+) -> None:
+    """A filter that narrows the candidate pool to exactly one row
+    yields an empty alternatives list. The renderer uses this as a
+    signal to skip the section."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            models=["cheap-1"],
+        )
+    assert (r.provider, r.model) == ("deepseek", "cheap-1")
+    assert r.alternatives == []
+
+
+def test_recommend_alternatives_size_when_pool_has_two_models(
+    priced_db: Path,
+) -> None:
+    """Pool=2 → 1 alternative. Confirms the slice doesn't IndexError
+    when the pool is smaller than the default count."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            models=["cheap-1", "mid-1"],
+        )
+    assert (r.provider, r.model) == ("deepseek", "cheap-1")
+    assert len(r.alternatives) == 1
+    assert (r.alternatives[0].provider, r.alternatives[0].model) == ("openai", "mid-1")
+
+
+def test_recommend_alternatives_respect_provider_filter(priced_db: Path) -> None:
+    """When `--provider openai` is set, alternatives must also be
+    from openai — otherwise they'd contradict the user's filter."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            providers=["openai"],
+        )
+    # Only one openai model in the fixture (mid-1), so no alternatives.
+    assert (r.provider, r.model) == ("openai", "mid-1")
+    assert r.alternatives == []
+    # All alternatives that DO exist (in a multi-row provider) must
+    # have the right provider.
+    for alt in r.alternatives:
+        assert alt.provider == "openai"
+
+
+def test_recommend_alternatives_drawn_from_affordable_pool(priced_db: Path) -> None:
+    """When the budget filter is active, alternatives come from the
+    affordable pool — not the full set. budget=$5 keeps cheap-1
+    ($3) and excludes mid-1 ($6) + premium-1 ($15), so alternatives
+    is empty (only one model fits)."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            budget_usd=5.0,
+        )
+    assert (r.provider, r.model) == ("deepseek", "cheap-1")
+    assert r.alternatives == []
+
+
+def test_recommend_alternatives_drawn_from_full_pool_on_over_budget_fallback(
+    priced_db: Path,
+) -> None:
+    """When the budget filter triggers the over-budget fallback,
+    alternatives come from the filtered (not affordable) pool — same
+    pool the chosen row was drawn from, per the spec."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            budget_usd=0.01,  # below cheapest at this workload
+        )
+    # Over budget: chosen is the cheapest of the FULL pool.
+    assert (r.provider, r.model) == ("deepseek", "cheap-1")
+    # Alternatives are the next two from the full pool, not "nothing
+    # affordable so nothing to suggest."
+    assert len(r.alternatives) == 2
+    assert [(a.provider, a.model) for a in r.alternatives] == [
+        ("openai", "mid-1"),
+        ("anthropic", "premium-1"),
+    ]

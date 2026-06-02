@@ -292,6 +292,9 @@ returns:
   provider:          string
   model:             string
   estimated_cost_usd: number
+  alternatives: [                       # up to 2 runner-ups, cost-asc
+    { provider, model, estimated_cost_usd }
+  ]
   reasoning:         string          # natural-language explanation
 ```
 
@@ -306,6 +309,14 @@ returns:
 > - `budget_usd` is applied *after* the provider/model filters, so an
 >   over-budget fallback picks the cheapest candidate **within the
 >   filter set**, not the cheapest priced model overall.
+> - `alternatives` are the next-cheapest two candidates from the
+>   **same pool** the chosen row came from — affordable when the
+>   budget fits, the filtered candidates when the budget triggers a
+>   fallback. Empty list when the pool has only one element (no
+>   runners-up to show). Respects the same `providers` / `models`
+>   filters as the chosen row, so the alternatives don't contradict
+>   the user's filter. Per-row `reasoning` is intentionally omitted
+>   — the main `reasoning` covers methodology once.
 
 > **v1 scope note.** The original signature accepted a
 > `quality_priority` axis (`"lowest_cost" | "balanced" | "highest_quality"`)

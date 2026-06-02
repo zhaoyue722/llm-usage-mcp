@@ -20,6 +20,7 @@ from llm_usage.cli_render import (
     format_usage_summary,
 )
 from llm_usage.core.models import (
+    Alternative,
     CompareProvidersResult,
     LargestCall,
     ProviderRow,
@@ -1267,14 +1268,20 @@ def _recommend_result(
     provider: str = "qwen",
     model: str = "qwen-flash",
     cost: float = 0.0042,
+    alternatives: list[Alternative] | None = None,
     reasoning: str = "For task 'anything': recommending qwen/qwen-flash.",
 ) -> RecommendProviderResult:
     return RecommendProviderResult(
         provider=provider,
         model=model,
         estimated_cost_usd=cost,
+        alternatives=alternatives if alternatives is not None else [],
         reasoning=reasoning,
     )
+
+
+def _alt(provider: str, model: str, cost: float) -> Alternative:
+    return Alternative(provider=provider, model=model, estimated_cost_usd=cost)
 
 
 def test_recommend_renders_two_section_layout() -> None:
@@ -1369,3 +1376,89 @@ def test_recommend_color_enabled_dims_the_reasoning_paragraph() -> None:
     reasoning_idx = next(i for i, line in enumerate(out.split("\n")) if "Reasoning" in line)
     paragraph_line = out.split("\n")[reasoning_idx + 1]
     assert "2" in _extract_ansi_codes(paragraph_line)  # dim
+
+
+# --- recommend: alternatives block ---------------------------------------
+
+
+def test_recommend_renders_alternatives_block_when_non_empty() -> None:
+    """When the result has alternatives, the renderer must produce an
+    `Alternatives` section between Recommendation and Reasoning."""
+    out = format_recommend_result(
+        _recommend_result(
+            alternatives=[
+                _alt("deepseek", "deepseek-coder", 0.0004),
+                _alt("openai", "gpt-5-nano", 0.0004),
+            ],
+        ),
+        color_enabled=False,
+    )
+    lines = out.split("\n")
+    rec_idx = next(i for i, line in enumerate(lines) if "Recommendation" in line)
+    alt_idx = next(i for i, line in enumerate(lines) if "Alternatives" in line)
+    rea_idx = next(i for i, line in enumerate(lines) if "Reasoning" in line)
+    # Order: Recommendation < Alternatives < Reasoning.
+    assert rec_idx < alt_idx < rea_idx
+
+
+def test_recommend_renders_one_indented_row_per_alternative() -> None:
+    out = format_recommend_result(
+        _recommend_result(
+            alternatives=[
+                _alt("deepseek", "deepseek-coder", 0.0004),
+                _alt("openai", "gpt-5-nano", 0.0004),
+            ],
+        ),
+        color_enabled=False,
+    )
+    # Branded names + cost should appear in indented rows.
+    assert "  DeepSeek / deepseek-coder" in out
+    assert "  OpenAI / gpt-5-nano" in out
+    # Cost column shows 4dp like the chosen row.
+    assert out.count("$0.0004") == 2
+
+
+def test_recommend_suppresses_alternatives_block_when_empty() -> None:
+    """The constraint the user asked for: a single-option result must
+    not show an empty `Alternatives` header."""
+    out = format_recommend_result(_recommend_result(alternatives=[]), color_enabled=False)
+    assert "Alternatives" not in out
+    # Reasoning is still present.
+    assert "Reasoning" in out
+
+
+def test_recommend_aligns_alternative_cost_column() -> None:
+    """The `$X.XXXX` column should line up vertically across
+    alternative rows, regardless of provider/model name length."""
+    out = format_recommend_result(
+        _recommend_result(
+            alternatives=[
+                _alt("openai", "x", 0.0004),
+                _alt("anthropic", "this-is-a-much-longer-model-name", 0.0010),
+            ],
+        ),
+        color_enabled=False,
+    )
+    cost_lines = [line for line in out.split("\n") if line.startswith("  ") and "$" in line]
+    # All cost columns should start at the same offset.
+    offsets = [line.index("$") for line in cost_lines]
+    assert len(set(offsets)) == 1, f"costs misaligned: {offsets}"
+
+
+def test_recommend_color_enabled_keeps_chosen_row_green_and_alternatives_default() -> None:
+    """The chosen row should stay green/bold (leader-row convention);
+    alternatives stay in default color so the chosen row pops without
+    needing color contrast on the runner-ups."""
+    out = format_recommend_result(
+        _recommend_result(
+            provider="qwen",
+            model="qwen-flash",
+            alternatives=[_alt("deepseek", "deepseek-coder", 0.0004)],
+        ),
+        color_enabled=True,
+    )
+    chosen_line = next(line for line in out.split("\n") if "qwen-flash" in line)
+    alt_line = next(line for line in out.split("\n") if "deepseek-coder" in line)
+    assert "32" in _extract_ansi_codes(chosen_line)  # green
+    # Alternative row should not carry green foreground.
+    assert "32" not in _extract_ansi_codes(alt_line)

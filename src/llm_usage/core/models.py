@@ -154,10 +154,33 @@ class RecommendProviderParams(ParamsBase):
     models: list[str] | None = None
 
 
+class Alternative(ResultBase):
+    """One runner-up entry on `RecommendProviderResult.alternatives`.
+
+    Per-row `reasoning` is intentionally omitted — the main
+    `RecommendProviderResult.reasoning` already covers methodology
+    once, and a reasoning paragraph per runner-up would just
+    restate "next-cheapest" three times. The `(provider, model,
+    estimated_cost_usd)` triple is all the caller needs to surface
+    the option to a user or feed it into a follow-up call.
+    """
+
+    provider: str
+    model: str
+    estimated_cost_usd: float
+
+
 class RecommendProviderResult(ResultBase):
     provider: str
     model: str
     estimated_cost_usd: float
+    # Up to `_DEFAULT_ALTERNATIVES_COUNT` runner-ups from the same
+    # pool the chosen row came from, cost-ascending. Empty when the
+    # pool has only one element (e.g., after a `providers` /
+    # `models` filter narrows to a single model) — the caller can
+    # use the empty list as a signal to suppress the section in a
+    # human-readable view.
+    alternatives: list[Alternative]
     reasoning: str
 
 
@@ -343,6 +366,7 @@ class ProvidersReport(ResultBase):
 
 
 __all__ = [
+    "Alternative",
     "CompareProvidersParams",
     "CompareProvidersResult",
     "GetPricingParams",
