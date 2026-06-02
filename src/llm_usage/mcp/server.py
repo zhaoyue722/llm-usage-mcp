@@ -43,7 +43,7 @@ from llm_usage.core.models import (
     SpendFilter,
     UsageSummaryResult,
 )
-from llm_usage.core.pricing import nano_to_usd
+from llm_usage.core.pricing import nano_to_usd, query_pricing
 from llm_usage.core.providers import OPENAI_COMPATIBLE
 from llm_usage.core.recommend import recommend as _recommend
 from llm_usage.core.recording import record_event
@@ -62,34 +62,19 @@ _RECENT_EVENTS_LIMIT: Final[int] = 50
 
 
 def _query_pricing(provider: str | None, model: str | None) -> list[PricingEntry]:
-    """Read `pricing_snapshot` rows matching the optional filters.
+    """Thin wrapper around `core.pricing.query_pricing` for the MCP tool.
 
-    Returns an empty list when nothing matches. Sort order is stable
-    (provider, model) so callers and tests can rely on it. Shared by
-    the `get_pricing` tool and the `usage://pricing_table` resource.
+    Keeps the MCP `get_pricing` tool's external contract identical
+    (single-value `provider` / `model` params) while delegating the
+    actual SQL to the shared core helper that the `llm-usage models`
+    CLI also uses.
     """
-    stmt = select(PricingSnapshot)
-    if provider is not None:
-        stmt = stmt.where(PricingSnapshot.provider == provider)
-    if model is not None:
-        stmt = stmt.where(PricingSnapshot.model == model)
-    stmt = stmt.order_by(PricingSnapshot.provider, PricingSnapshot.model)
-
     with get_session() as session:
-        rows = session.scalars(stmt).all()
-
-    return [
-        PricingEntry(
-            provider=row.provider,
-            model=row.model,
-            input_per_million_usd=row.input_per_million_usd,
-            output_per_million_usd=row.output_per_million_usd,
-            cache_write_per_million_usd=row.cache_write_per_million_usd,
-            cache_read_per_million_usd=row.cache_read_per_million_usd,
-            fetched_at=row.fetched_at,
+        return query_pricing(
+            session,
+            providers=[provider] if provider is not None else None,
+            models=[model] if model is not None else None,
         )
-        for row in rows
-    ]
 
 
 def _event_to_json(row: UsageEvent) -> dict[str, Any]:

@@ -13,6 +13,7 @@ import re
 
 from llm_usage.cli_render import (
     format_compare_result,
+    format_pricing_catalog,
     format_providers,
     format_recommend_result,
     format_spend_groups,
@@ -23,6 +24,7 @@ from llm_usage.core.models import (
     Alternative,
     CompareProvidersResult,
     LargestCall,
+    PricingEntry,
     ProviderRow,
     ProvidersReport,
     QuerySpendResult,
@@ -1550,3 +1552,259 @@ def test_recommend_color_enabled_keeps_chosen_row_green_and_alternatives_default
     assert "32" in _extract_ansi_codes(chosen_line)  # green
     # Alternative row should not carry green foreground.
     assert "32" not in _extract_ansi_codes(alt_line)
+
+
+# --- format_pricing_catalog ---------------------------------------------
+
+
+def _pricing(
+    provider: str,
+    model: str,
+    *,
+    input_rate: float,
+    output_rate: float,
+    cache_read: float | None = None,
+    cache_write: float | None = None,
+) -> PricingEntry:
+    return PricingEntry(
+        provider=provider,
+        model=model,
+        input_per_million_usd=input_rate,
+        output_per_million_usd=output_rate,
+        cache_read_per_million_usd=cache_read,
+        cache_write_per_million_usd=cache_write,
+        fetched_at=1,
+    )
+
+
+def test_catalog_empty_returns_one_line_hint() -> None:
+    """No entries → single hint line, no table scaffolding."""
+    out = format_pricing_catalog([], color_enabled=False)
+    assert "no priced models" in out
+    assert "\n" not in out
+
+
+def test_catalog_renders_section_header_and_column_row() -> None:
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "gpt-x", input_rate=1.0, output_rate=2.0),
+        ],
+        color_enabled=False,
+    )
+    lines = out.split("\n")
+    assert "Pricing catalog" in lines[0]
+    # Blank line between section header and column row.
+    assert lines[1] == ""
+    assert "Provider" in lines[2]
+    assert "Model" in lines[2]
+    assert "Input/M" in lines[2]
+    assert "Output/M" in lines[2]
+
+
+def test_catalog_renders_branded_provider_names() -> None:
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "gpt-x", input_rate=1.0, output_rate=2.0),
+            _pricing("deepseek", "ds-x", input_rate=1.0, output_rate=2.0),
+        ],
+        color_enabled=False,
+    )
+    # CamelCase brand names, not the lowercase DB form.
+    assert "OpenAI" in out
+    assert "DeepSeek" in out
+
+
+def test_catalog_renders_2dp_rates() -> None:
+    out = format_pricing_catalog(
+        [_pricing("openai", "gpt-x", input_rate=1.234, output_rate=10.0)],
+        color_enabled=False,
+    )
+    assert "$1.23" in out
+    assert "$10.00" in out
+
+
+def test_catalog_dedups_same_family_same_price_entries() -> None:
+    """alias + dated snapshot at identical price → 1 row with ×2."""
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "gpt-5-mini", input_rate=0.25, output_rate=1.0),
+            _pricing("openai", "gpt-5-mini-2025-08-07", input_rate=0.25, output_rate=1.0),
+        ],
+        color_enabled=False,
+    )
+    # Snapshot variant must NOT appear; the alias represents both.
+    assert "gpt-5-mini-2025-08-07" not in out
+    nano_line = next(line for line in out.split("\n") if "gpt-5-mini" in line)
+    assert "×2" in nano_line
+
+
+def test_catalog_keeps_same_family_different_price_entries() -> None:
+    """Price divergence within a family → both rows survive."""
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "gpt-5-mini", input_rate=0.25, output_rate=1.0),
+            _pricing("openai", "gpt-5-mini-2025-08-07", input_rate=0.20, output_rate=0.80),
+        ],
+        color_enabled=False,
+    )
+    assert "gpt-5-mini " in out  # alias row
+    assert "gpt-5-mini-2025-08-07" in out  # snapshot row
+    # Neither row carries a ×N marker (each is solo).
+    assert "×" not in out
+
+
+def test_catalog_show_all_disables_dedup() -> None:
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "gpt-5-mini", input_rate=0.25, output_rate=1.0),
+            _pricing("openai", "gpt-5-mini-2025-08-07", input_rate=0.25, output_rate=1.0),
+        ],
+        show_all=True,
+        color_enabled=False,
+    )
+    assert "gpt-5-mini-2025-08-07" in out
+    assert "×" not in out
+
+
+def test_catalog_cache_columns_hidden_by_default() -> None:
+    out = format_pricing_catalog(
+        [
+            _pricing(
+                "anthropic",
+                "claude-x",
+                input_rate=1.0,
+                output_rate=5.0,
+                cache_read=0.1,
+                cache_write=1.25,
+            )
+        ],
+        color_enabled=False,
+    )
+    assert "Cache R/M" not in out
+    assert "Cache W/M" not in out
+    assert "$0.10" not in out  # cache_read rate not rendered
+    # Footer points at the flag for discovery.
+    assert "--cache to show" in out
+
+
+def test_catalog_cache_columns_visible_with_show_cache() -> None:
+    out = format_pricing_catalog(
+        [
+            _pricing(
+                "anthropic",
+                "claude-x",
+                input_rate=1.0,
+                output_rate=5.0,
+                cache_read=0.1,
+                cache_write=1.25,
+            )
+        ],
+        show_cache=True,
+        color_enabled=False,
+    )
+    assert "Cache R/M" in out
+    assert "Cache W/M" in out
+    assert "$0.10" in out
+    assert "$1.25" in out
+
+
+def test_catalog_cache_columns_render_dash_for_missing_rates() -> None:
+    """A model with no cache rates should show `—` in the cache cells
+    rather than `$0.00` or a blank — `—` makes "absent" obvious."""
+    out = format_pricing_catalog(
+        [
+            _pricing(
+                "qwen",
+                "qwen-x",
+                input_rate=0.05,
+                output_rate=0.2,
+                cache_read=None,
+                cache_write=None,
+            )
+        ],
+        show_cache=True,
+        color_enabled=False,
+    )
+    qwen_line = next(line for line in out.split("\n") if "qwen-x" in line)
+    assert "—" in qwen_line
+
+
+def test_catalog_sort_provider_keeps_input_order() -> None:
+    """Default `sort=provider` preserves the alphabetical (provider,
+    model) order that `query_pricing` provides."""
+    entries = [
+        _pricing("anthropic", "a", input_rate=10.0, output_rate=20.0),
+        _pricing("openai", "b", input_rate=1.0, output_rate=2.0),
+        _pricing("qwen", "c", input_rate=5.0, output_rate=10.0),
+    ]
+    out = format_pricing_catalog(entries, color_enabled=False)
+    a_idx = out.index("Anthropic")
+    o_idx = out.index("OpenAI")
+    q_idx = out.index("Qwen")
+    assert a_idx < o_idx < q_idx
+
+
+def test_catalog_sort_input_orders_by_input_rate_ascending() -> None:
+    entries = [
+        _pricing("anthropic", "expensive", input_rate=10.0, output_rate=20.0),
+        _pricing("openai", "cheap", input_rate=1.0, output_rate=2.0),
+        _pricing("qwen", "mid", input_rate=5.0, output_rate=10.0),
+    ]
+    out = format_pricing_catalog(entries, sort="input", color_enabled=False)
+    assert "sorted by input rate" in out
+    cheap_idx = out.index("cheap")
+    mid_idx = out.index("mid")
+    expensive_idx = out.index("expensive")
+    assert cheap_idx < mid_idx < expensive_idx
+
+
+def test_catalog_sort_output_orders_by_output_rate_ascending() -> None:
+    entries = [
+        _pricing("anthropic", "high-out", input_rate=1.0, output_rate=100.0),
+        _pricing("openai", "low-out", input_rate=1.0, output_rate=2.0),
+    ]
+    out = format_pricing_catalog(entries, sort="output", color_enabled=False)
+    assert "sorted by output rate" in out
+    assert out.index("low-out") < out.index("high-out")
+
+
+def test_catalog_unknown_sort_raises() -> None:
+    """Defensive — unknown sort axis must surface as an error rather
+    than silently fall through to provider-order."""
+    import pytest
+
+    entries = [_pricing("openai", "x", input_rate=1.0, output_rate=2.0)]
+    with pytest.raises(ValueError, match="unknown sort axis"):
+        format_pricing_catalog(entries, sort="cost", color_enabled=False)
+
+
+def test_catalog_color_disabled_emits_no_ansi() -> None:
+    out = format_pricing_catalog(
+        [_pricing("openai", "gpt-x", input_rate=1.0, output_rate=2.0)],
+        color_enabled=False,
+    )
+    assert _ANSI_RE.search(out) is None
+
+
+def test_catalog_color_enabled_marks_section_label_cyan() -> None:
+    out = format_pricing_catalog(
+        [_pricing("openai", "gpt-x", input_rate=1.0, output_rate=2.0)],
+        color_enabled=True,
+    )
+    header = out.split("\n")[0]
+    assert "36" in _extract_ansi_codes(header)  # cyan
+    assert "1" in _extract_ansi_codes(header)  # bold
+
+
+def test_catalog_variant_marker_is_dim_when_color_enabled() -> None:
+    """`×N` cells get the dim attribute so they don't compete with
+    the rate columns — same convention as `compare`'s variant column."""
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "gpt-5-mini", input_rate=1.0, output_rate=2.0),
+            _pricing("openai", "gpt-5-mini-2025-08-07", input_rate=1.0, output_rate=2.0),
+        ],
+        color_enabled=True,
+    )
+    mini_line = next(line for line in out.split("\n") if "gpt-5-mini" in line)
+    assert "2" in _extract_ansi_codes(mini_line)  # dim somewhere on the line

@@ -80,6 +80,7 @@ from llm_usage.core.models import (
     GroupBy,
     LargestCall,
     Period,
+    PricingEntry,
     ProviderRow,
     ProvidersReport,
     QuerySpendResult,
@@ -92,6 +93,7 @@ from llm_usage.core.models import (
     TopProvider,
     UsageSummaryResult,
 )
+from llm_usage.core.pricing import family_root
 
 # Lower 5/8 block — chosen because it fills the bottom 5/8 of the cell,
 # leaving the top 3/8 empty. Vertically-adjacent rows of this glyph
@@ -1240,8 +1242,272 @@ def _wrap_paragraph(text: str, width: int) -> list[str]:
     ) or [""]
 
 
+# --- models (pricing catalog) renderer ----------------------------------
+#
+# `llm-usage models` is the CLI mirror of the MCP `get_pricing` tool —
+# answers "what does X charge per million tokens?" rather than
+# `compare`'s "what would X cost for my workload?". The view is a
+# catalog browser, not a workload projection, so the column shape is:
+#
+#     Provider   Model            Input/M    Output/M  [Cache R/M  Cache W/M]
+#
+# Cache columns are hidden by default (most models don't carry cache
+# rates and sparse columns waste width). Pass `show_cache=True` (CLI
+# `--cache`) to surface them; rows without cache rates render `—`.
+#
+# Sort:
+# - `provider` (default) — alphabetical by (provider, model). Catalog feel.
+# - `input` — by input rate ascending. Cheapest input first.
+# - `output` — by output rate ascending. Cheapest output first.
+#
+# Family dedup:
+# - Default-on, same `(family_root, rate-tuple)` collapse rule as
+#   `compare`: rows that share a family root AND identical pricing
+#   (input + output, plus cache rates when present) collapse to one
+#   row with `×N` indicating the catalog count.
+# - Set `show_all=True` (CLI `--all`) to disable.
+# - When prices diverge within a family, both rows survive.
+
+
+def format_pricing_catalog(
+    entries: list[PricingEntry],
+    *,
+    sort: str = "provider",
+    show_cache: bool = False,
+    show_all: bool = False,
+    color_enabled: bool,
+) -> str:
+    """Render the pricing catalog for terminal display. Returns one string.
+
+    Empty `entries` returns a single hint line so the caller doesn't
+    have to special-case the "no priced models" state.
+
+    Two layers of transformation happen here:
+    1. Family-dedup (skipped when `show_all=True`) collapses
+       `(family_root, rate-tuple)` siblings into one row carrying a
+       `×N` marker.
+    2. Sort applies after dedup so the user sees a stable, branded
+       column ordering (cheapest-rate-first when `sort` ≠ "provider").
+    """
+    if not entries:
+        return _style(
+            "no priced models in pricing_snapshot — is the database bootstrapped?",
+            color_enabled,
+            dim=True,
+        )
+
+    rows = _build_catalog_rows(entries, show_all=show_all)
+    rows = _sort_catalog_rows(rows, sort=sort)
+
+    # Floor each column width at the column label length so the header
+    # row never overhangs the data column (a one-character `provider`
+    # name would otherwise leave `Provider` jutting out into the next
+    # column). Same trick for `Model`.
+    provider_w = max(
+        len("Provider"),
+        max(len(_provider_display(r.entry.provider)) for r in rows),
+    )
+    model_w = max(len("Model"), max(len(r.entry.model) for r in rows))
+    variant_w = max((len(f"×{r.variant_count}") for r in rows if r.variant_count > 1), default=0)
+
+    header = _format_catalog_header(len(rows), sort, color_enabled)
+    column_header = _format_catalog_column_header(
+        provider_w=provider_w,
+        model_w=model_w,
+        show_cache=show_cache,
+        color_enabled=color_enabled,
+    )
+
+    data_lines = [
+        _format_catalog_row(
+            row,
+            provider_w=provider_w,
+            model_w=model_w,
+            variant_w=variant_w,
+            show_cache=show_cache,
+            color_enabled=color_enabled,
+        )
+        for row in rows
+    ]
+
+    footnotes = _catalog_footnotes(
+        any_collapsed=variant_w > 0,
+        show_cache=show_cache,
+        color_enabled=color_enabled,
+    )
+
+    # Blank line after the section header so the column row reads as
+    # the start of the table, not part of the header.
+    blocks = [header, "", column_header, *data_lines]
+    if footnotes:
+        blocks.append("")
+        blocks.extend(footnotes)
+    return "\n".join(blocks)
+
+
+# Internal type for catalog rendering — pairs `PricingEntry` with a
+# `variant_count` produced by family-dedup. Not a Pydantic model
+# because it doesn't cross any wire boundary; this is purely a
+# rendering-time aggregate.
+class _CatalogRow:
+    __slots__ = ("entry", "variant_count")
+
+    def __init__(self, entry: PricingEntry, variant_count: int = 1) -> None:
+        self.entry = entry
+        self.variant_count = variant_count
+
+
+def _build_catalog_rows(entries: list[PricingEntry], *, show_all: bool) -> list[_CatalogRow]:
+    """Apply family-dedup to a flat list of `PricingEntry`.
+
+    Dedup key = `(family_root, input_rate, output_rate, cache_read_rate,
+    cache_write_rate)`. Same logic as `compare`'s default-dedup: rows
+    that share a family root **and** identical pricing collapse to one
+    representative; price divergence (any rate differs) keeps rows
+    separate. `show_all=True` skips dedup entirely.
+
+    Within each (family, rate-tuple) class the alphabetically-first
+    member wins — typically the alias form (it's a strict lex prefix
+    of dated snapshots).
+    """
+    if show_all:
+        return [_CatalogRow(entry, variant_count=1) for entry in entries]
+
+    seen: dict[tuple[str, float, float, float | None, float | None], int] = {}
+    rows: list[_CatalogRow] = []
+    for entry in entries:
+        key = (
+            family_root(entry.model),
+            entry.input_per_million_usd,
+            entry.output_per_million_usd,
+            entry.cache_read_per_million_usd,
+            entry.cache_write_per_million_usd,
+        )
+        if key in seen:
+            rows[seen[key]].variant_count += 1
+            continue
+        seen[key] = len(rows)
+        rows.append(_CatalogRow(entry, variant_count=1))
+    return rows
+
+
+def _sort_catalog_rows(rows: list[_CatalogRow], *, sort: str) -> list[_CatalogRow]:
+    """Sort catalog rows. Default = `(provider, model)`; alternatives
+    sort by `input` or `output` rate ascending.
+
+    Python's sort is stable, so the input order (alphabetical
+    `(provider, model)` from `query_pricing`) is preserved as the
+    secondary key when sorting by rate.
+    """
+    if sort == "provider":
+        return list(rows)
+    if sort == "input":
+        return sorted(rows, key=lambda r: r.entry.input_per_million_usd)
+    if sort == "output":
+        return sorted(rows, key=lambda r: r.entry.output_per_million_usd)
+    raise ValueError(f"unknown sort axis: {sort!r}")
+
+
+def _format_catalog_header(count: int, sort: str, color_enabled: bool) -> str:
+    """`Pricing catalog · 180 models` (or with sort suffix)."""
+    base = f"Pricing catalog · {count} model" if count == 1 else f"Pricing catalog · {count} models"
+    if sort != "provider":
+        base = f"{base} · sorted by {sort} rate"
+    return _section_label(base, color_enabled)
+
+
+def _format_catalog_column_header(
+    *, provider_w: int, model_w: int, show_cache: bool, color_enabled: bool
+) -> str:
+    """Column-label line under the section header, dim-styled."""
+    columns = [
+        "Provider".ljust(provider_w),
+        "Model".ljust(model_w),
+        "Input/M".rjust(9),
+        "Output/M".rjust(9),
+    ]
+    if show_cache:
+        columns.append("Cache R/M".rjust(10))
+        columns.append("Cache W/M".rjust(10))
+    return _style("  ".join(columns), color_enabled, dim=True)
+
+
+def _format_catalog_row(
+    row: _CatalogRow,
+    *,
+    provider_w: int,
+    model_w: int,
+    variant_w: int,
+    show_cache: bool,
+    color_enabled: bool,
+) -> str:
+    """One data row. Cache cells render `—` when the model has no cache rate."""
+    entry = row.entry
+    provider = _provider_display(entry.provider).ljust(provider_w)
+    model = entry.model.ljust(model_w)
+    input_rate = _format_rate(entry.input_per_million_usd).rjust(9)
+    output_rate = _format_rate(entry.output_per_million_usd).rjust(9)
+
+    parts = [provider, model, input_rate, output_rate]
+    if show_cache:
+        parts.append(_format_rate_or_dash(entry.cache_read_per_million_usd).rjust(10))
+        parts.append(_format_rate_or_dash(entry.cache_write_per_million_usd).rjust(10))
+    raw = "  ".join(parts)
+
+    if variant_w > 0:
+        raw += _variant_suffix(row.variant_count, variant_w)
+        if color_enabled and row.variant_count > 1:
+            # Dim only the variant suffix; leave the rest in default.
+            raw_no_variant = "  ".join(parts)
+            suffix = _variant_suffix(row.variant_count, variant_w)
+            return raw_no_variant + _style(suffix, color_enabled, dim=True)
+    return raw
+
+
+def _format_rate(rate: float) -> str:
+    """`$1.25` — 2dp for catalog browsing. Rates per million vary from
+    $0.04 (cheapest) to $90+ (Claude Opus), so 2dp is enough granularity
+    without sub-cent noise."""
+    return f"${rate:.2f}"
+
+
+def _format_rate_or_dash(rate: float | None) -> str:
+    """`$1.25` for present rates; `—` for absent (no cache pricing)."""
+    if rate is None:
+        return "—"
+    return _format_rate(rate)
+
+
+def _catalog_footnotes(*, any_collapsed: bool, show_cache: bool, color_enabled: bool) -> list[str]:
+    """Trailing notes — only emitted when relevant.
+
+    `×N` note appears only when at least one row collapsed variants.
+    `--cache` hint appears only when cache columns are hidden (so users
+    discover the flag without being told every time they pass it).
+    """
+    notes: list[str] = []
+    if any_collapsed:
+        notes.append(
+            _style(
+                "note: ×N indicates N collapsed catalog variants (--all to see)",
+                color_enabled,
+                dim=True,
+            )
+        )
+    if not show_cache:
+        notes.append(
+            _style(
+                "note: --cache to show cache_read/M + cache_write/M columns",
+                color_enabled,
+                dim=True,
+            )
+        )
+    return notes
+
+
 __all__ = [
     "format_compare_result",
+    "format_pricing_catalog",
     "format_providers",
     "format_recommend_result",
     "format_spend_groups",
