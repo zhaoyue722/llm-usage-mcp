@@ -26,9 +26,9 @@ for `NO_COLOR`, and for non-TTY stdout.
 - Pct is right-aligned with comma thousands separator (`9,384%`).
 
 Color treatment ("winner + ratio heat"):
-- Cheapest row: bold green across the whole line.
-- All other rows: `Pct%` column is heat-mapped — green ≤200%, yellow
-  ≤500%, red >500%.
+- Cheapest row: bold mint across the whole line.
+- All other rows: `Pct%` column is heat-mapped — mint ≤200%, soft
+  yellow ≤500%, rose >500%.
 - Header line and divider rules: dim.
 
 ## `spend` output
@@ -50,20 +50,23 @@ ratios are typically 2-10x; log would compress a real 4:1 difference
 between providers into something visually close.
 
 Color treatment for `spend` (per-column identity, not heat):
-- Top spender / top model: bold green across the whole row — the
+- Top spender / top model: bold mint across the whole row — the
   leader stripe is uniform so it pops against the multi-color
   non-leader rows below. Same convention as `compare`.
-- Non-leader rows: name in default; bar in white; cost in yellow
-  (money); calls in cyan (count); pct in magenta (share). Each
+- Non-leader rows: name in default; bar in sky; cost in peach
+  (money); calls in lavender (count); pct in pink (share). Each
   column gets its own color so a reader can scan vertically by
   "tell me the cost column" without re-reading row labels.
 - Section labels ("top providers:", "top models:", "largest call:"):
-  bold cyan — structural navigation, not data.
+  bold mauve — structural navigation, not data.
 - The headline total: bold (no color change).
 - Header / divider / `note:` lines: dim.
 - Deliberately *no* heat-mapping on `%` — a high share is what you
   *expect* from the leader, so painting it red would invert the
   natural reading from `compare`.
+
+The palette names (mint, sky, peach, pink, lavender, mauve, soft
+yellow, rose) are defined as RGB constants at module scope below.
 """
 
 from __future__ import annotations
@@ -126,6 +129,39 @@ _PROVIDER_DISPLAY: Final[dict[str, str]] = {
     "qwen": "Qwen",
     "deepseek": "DeepSeek",
 }
+
+
+# --- color palette (warm low-contrast dark theme) ------------------------
+#
+# RGB tuples for truecolor styling. `click.style` accepts these directly
+# and falls back to nearest 256-color on legacy terminals, so the same
+# values work whether the user is in iTerm2, Alacritty, kitty, modern
+# Terminal.app, VS Code's terminal, or a TTY without truecolor support.
+#
+# Inspired by Catppuccin Mocha — soft, low-saturation hues that read
+# well on dark backgrounds without the harsh contrast of pure ANSI
+# greens and yellows. Each constant has one semantic role; the role,
+# not the hue, drives where it's used. Re-skinning the palette later
+# is a one-place edit.
+#
+# Semantic mapping:
+#   _MAUVE        section labels / headings (bold)
+#   _SKY          provider column, bars (structural identity)
+#   _MINT         leader rows, OK / success, low-heat (`compare`)
+#   _PEACH        money — rates, costs, dollar amounts
+#   _PINK         pct / share-of-total
+#   _SOFT_YELLOW  attention / warning, mid-heat (`compare`)
+#   _ROSE         high-heat — very expensive (`compare`)
+#   _LAVENDER     calls / count columns
+
+_MAUVE: Final[tuple[int, int, int]] = (203, 166, 247)
+_SKY: Final[tuple[int, int, int]] = (137, 220, 235)
+_MINT: Final[tuple[int, int, int]] = (130, 214, 163)
+_PEACH: Final[tuple[int, int, int]] = (250, 179, 135)
+_PINK: Final[tuple[int, int, int]] = (245, 194, 231)
+_SOFT_YELLOW: Final[tuple[int, int, int]] = (249, 226, 175)
+_ROSE: Final[tuple[int, int, int]] = (243, 139, 168)
+_LAVENDER: Final[tuple[int, int, int]] = (180, 190, 254)
 
 
 def format_compare_result(
@@ -256,7 +292,7 @@ def _format_row(
         return raw
 
     if is_winner:
-        return click.style(raw, fg="green", bold=True)
+        return click.style(raw, fg=_MINT, bold=True)
 
     # Non-winner rows: heat the (already-padded) Pct% column only,
     # leaving the variant column in its dim default. Variant suffix
@@ -343,10 +379,10 @@ def _provider_display(name: str) -> str:
 def _style_pct(pct_text: str, ratio: float) -> str:
     """Color the Pct% column on a green/yellow/red heat scale."""
     if ratio <= _HEAT_GREEN_MAX:
-        return click.style(pct_text, fg="green")
+        return click.style(pct_text, fg=_MINT)
     if ratio <= _HEAT_YELLOW_MAX:
-        return click.style(pct_text, fg="yellow")
-    return click.style(pct_text, fg="red")
+        return click.style(pct_text, fg=_SOFT_YELLOW)
+    return click.style(pct_text, fg=_ROSE)
 
 
 def _style(text: str, color_enabled: bool, *, dim: bool = False, **kwargs: object) -> str:
@@ -529,7 +565,7 @@ def _ms_to_datetime(ms: int) -> str:
 
 
 def _section_label(label: str, color_enabled: bool) -> str:
-    return _style(label, color_enabled, fg="cyan", bold=True)
+    return _style(label, color_enabled, fg=_MAUVE, bold=True)
 
 
 def _empty_window_message(period: Period, color_enabled: bool) -> str:
@@ -675,13 +711,13 @@ def _format_top_row(
     if is_leader and color_enabled:
         return click.style(
             f"  {key_str}  {bar}  {cost}  {pct_str}",
-            fg="green",
+            fg=_MINT,
             bold=True,
         )
 
-    bar_styled = _style(bar, color_enabled, fg="white")
-    cost_styled = _style(cost, color_enabled, fg="yellow")
-    pct_styled = _style(pct_str, color_enabled, fg="magenta")
+    bar_styled = _style(bar, color_enabled, fg=_SKY)
+    cost_styled = _style(cost, color_enabled, fg=_PEACH)
+    pct_styled = _style(pct_str, color_enabled, fg=_PINK)
     return f"  {key_str}  {bar_styled}  {cost_styled}  {pct_styled}"
 
 
@@ -729,14 +765,14 @@ def _format_spend_row(
     if is_leader and color_enabled:
         return click.style(
             f"{key_str}  {bar}  {cost}  {calls}  {pct_str}",
-            fg="green",
+            fg=_MINT,
             bold=True,
         )
 
-    bar_styled = _style(bar, color_enabled, fg="white")
-    cost_styled = _style(cost, color_enabled, fg="yellow")
-    calls_styled = _style(calls, color_enabled, fg="cyan")
-    pct_styled = _style(pct_str, color_enabled, fg="magenta")
+    bar_styled = _style(bar, color_enabled, fg=_SKY)
+    cost_styled = _style(cost, color_enabled, fg=_PEACH)
+    calls_styled = _style(calls, color_enabled, fg=_LAVENDER)
+    pct_styled = _style(pct_str, color_enabled, fg=_PINK)
     return f"{key_str}  {bar_styled}  {cost_styled}  {calls_styled}  {pct_styled}"
 
 
@@ -807,7 +843,7 @@ def _status_database_block(report: StatusReport, color_enabled: bool) -> list[st
             + _style(
                 "not initialized (run llm-usage proxy or llm-usage-mcp once to migrate)",
                 color_enabled,
-                fg="yellow",
+                fg=_SOFT_YELLOW,
             ),
             "",
         ]
@@ -815,17 +851,17 @@ def _status_database_block(report: StatusReport, color_enabled: bool) -> list[st
     db = report.database
     rev_text = db.schema_revision or "missing"
     schema_value = (
-        _style(f"head (rev {rev_text})", color_enabled, fg="green")
+        _style(f"head (rev {rev_text})", color_enabled, fg=_MINT)
         if db.schema_at_head
         else _style(
             f"behind (current rev {rev_text}; next boot will migrate)",
             color_enabled,
-            fg="yellow",
+            fg=_SOFT_YELLOW,
         )
     )
 
     if db.event_count == 0:
-        events_value = _style("none recorded yet", color_enabled, fg="yellow")
+        events_value = _style("none recorded yet", color_enabled, fg=_SOFT_YELLOW)
     else:
         oldest = _ms_to_date(db.oldest_event_ms) if db.oldest_event_ms else "—"
         newest = _ms_to_date(db.newest_event_ms) if db.newest_event_ms else "—"
@@ -853,10 +889,10 @@ def _status_proxy_block(report: StatusReport, color_enabled: bool) -> list[str]:
         status_value = _style("unknown (--no-net)", color_enabled, dim=True)
         lines.append(_kv_row("status", status_value, color_enabled, value_already_styled=True))
     elif proxy.reachable:
-        status_value = _style("running", color_enabled, fg="green")
+        status_value = _style("running", color_enabled, fg=_MINT)
         lines.append(_kv_row("status", status_value, color_enabled, value_already_styled=True))
     else:
-        status_value = _style("not running", color_enabled, fg="yellow")
+        status_value = _style("not running", color_enabled, fg=_SOFT_YELLOW)
         lines.append(_kv_row("status", status_value, color_enabled, value_already_styled=True))
         start_hint = _style("uv run llm-usage proxy", color_enabled, dim=True)
         lines.append(_kv_row("start", start_hint, color_enabled, value_already_styled=True))
@@ -887,9 +923,9 @@ def _format_provider_row(
     """`  Name        state          base-url      N models priced` (one row)."""
     name = provider.display_name.ljust(name_w)
     if provider.key_set:
-        state = _style("key set".ljust(state_w), color_enabled, fg="green")
+        state = _style("key set".ljust(state_w), color_enabled, fg=_MINT)
     else:
-        state = _style("key missing".ljust(state_w), color_enabled, fg="yellow")
+        state = _style("key missing".ljust(state_w), color_enabled, fg=_SOFT_YELLOW)
     models_suffix = (
         f"{provider.model_count} models priced" if provider.model_count != 1 else "1 model priced"
     )
@@ -904,7 +940,9 @@ def _status_pricing_block(report: StatusReport, color_enabled: bool, now_ms: int
 
     p = report.pricing
     if p.model_count == 0:
-        catalog_value = _style("empty (run bootstrap to materialize)", color_enabled, fg="yellow")
+        catalog_value = _style(
+            "empty (run bootstrap to materialize)", color_enabled, fg=_SOFT_YELLOW
+        )
         return [
             _section_label("Pricing", color_enabled),
             _kv_row("catalog", catalog_value, color_enabled, value_already_styled=True),
@@ -924,7 +962,7 @@ def _status_pricing_block(report: StatusReport, color_enabled: bool, now_ms: int
 def _format_refreshed(fetched_at_ms: int | None, now_ms: int, color_enabled: bool) -> str:
     """`2026-05-31 (1 day ago)` — yellow when older than `_PRICING_STALE_DAYS`."""
     if fetched_at_ms is None:
-        return _style("never", color_enabled, fg="yellow")
+        return _style("never", color_enabled, fg=_SOFT_YELLOW)
 
     date_str = _ms_to_date(fetched_at_ms)
     age_ms = max(0, now_ms - fetched_at_ms)
@@ -938,7 +976,7 @@ def _format_refreshed(fetched_at_ms: int | None, now_ms: int, color_enabled: boo
 
     rendered = f"{date_str} ({age_phrase})"
     if age_days > _PRICING_STALE_DAYS:
-        return _style(rendered, color_enabled, fg="yellow")
+        return _style(rendered, color_enabled, fg=_SOFT_YELLOW)
     return rendered
 
 
@@ -1087,9 +1125,9 @@ def _format_providers_row(
     name = provider.display_name.ljust(name_w)
 
     if provider.key_set:
-        state = _style("key set".ljust(state_w), color_enabled, fg="green")
+        state = _style("key set".ljust(state_w), color_enabled, fg=_MINT)
     else:
-        state = _style("key missing".ljust(state_w), color_enabled, fg="yellow")
+        state = _style("key missing".ljust(state_w), color_enabled, fg=_SOFT_YELLOW)
 
     compat_text = f"openai-compat: {'yes' if provider.openai_compatible else 'no'}"
     compat = _style(compat_text.ljust(compat_w), color_enabled, dim=True)
@@ -1177,9 +1215,7 @@ def format_recommend_result(
     label_w = max(len(label) for label in [chosen_label, *alt_labels])
 
     chosen_line = f"  {chosen_label.ljust(label_w)}  {_format_cost(result.estimated_cost_usd)}"
-    styled_chosen = (
-        click.style(chosen_line, fg="green", bold=True) if color_enabled else chosen_line
-    )
+    styled_chosen = click.style(chosen_line, fg=_MINT, bold=True) if color_enabled else chosen_line
 
     reasoning_lines = [
         "  " + line for line in _wrap_paragraph(result.reasoning, _RECOMMEND_REASONING_WIDTH - 2)
@@ -1490,22 +1526,22 @@ def _format_catalog_row(
             assert cache_read_text is not None and cache_write_text is not None
             parts.extend([cache_read_text, cache_write_text])
         raw = "  ".join(parts) + variant_text
-        return click.style(raw, fg="green", bold=True)
+        return click.style(raw, fg=_MINT, bold=True)
 
     # Non-leader (or no-color) path: per-column styling. Each cell is
     # pre-padded before styling so the visible widths line up
     # regardless of ANSI escape lengths.
-    provider_styled = _style(provider_text, color_enabled, fg="cyan")
+    provider_styled = _style(provider_text, color_enabled, fg=_SKY)
     # Model column stays default-color — it's the row label, not data.
-    input_styled = _style(input_text, color_enabled, fg="yellow")
-    output_styled = _style(output_text, color_enabled, fg="yellow")
+    input_styled = _style(input_text, color_enabled, fg=_PEACH)
+    output_styled = _style(output_text, color_enabled, fg=_PEACH)
 
     parts_styled: list[str] = [provider_styled, model_text, input_styled, output_styled]
     if show_cache:
         assert cache_read_text is not None and cache_write_text is not None
         # Cache columns: yellow + dim. Money, but secondary signal.
-        parts_styled.append(_style(cache_read_text, color_enabled, fg="yellow", dim=True))
-        parts_styled.append(_style(cache_write_text, color_enabled, fg="yellow", dim=True))
+        parts_styled.append(_style(cache_read_text, color_enabled, fg=_PEACH, dim=True))
+        parts_styled.append(_style(cache_write_text, color_enabled, fg=_PEACH, dim=True))
 
     line = "  ".join(parts_styled)
     if variant_w > 0:
