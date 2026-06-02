@@ -218,6 +218,7 @@ async def compare_providers(
     expected_input_tokens: int,
     expected_output_tokens: int,
     models: list[str] | None = None,
+    include_snapshots: bool = False,
 ) -> CompareProvidersResult:
     """Project the cost of a hypothetical workload across providers/models.
 
@@ -227,6 +228,15 @@ async def compare_providers(
     those model names. Cost is computed from input/output tokens only;
     `RankedEntry.notes` is always `None` in v1 (the field is retained
     for future per-row caveats like "tiered pricing approximated").
+
+    `include_snapshots=False` (the default) family-dedups the ranked
+    list: rows sharing both a model-family root (`gpt-5-mini` ↔
+    `gpt-5-mini-2025-08-07`) AND an identical projected cost collapse
+    to one representative, with `RankedEntry.variant_count` recording
+    how many catalog rows the entry stands for. Set
+    `include_snapshots=True` to see every catalog row (each with
+    `variant_count=1`) — useful when comparing snapshot-by-snapshot
+    pricing for production pinning.
     """
     with get_session() as session:
         return _project_compare(
@@ -234,6 +244,7 @@ async def compare_providers(
             input_tokens=expected_input_tokens,
             output_tokens=expected_output_tokens,
             models=models,
+            include_snapshots=include_snapshots,
         )
 
 

@@ -132,6 +132,14 @@ class RankedEntry(ResultBase):
     # caveat (e.g., "tiered pricing approximated") doesn't require a
     # schema change. Always `None` today.
     notes: str | None
+    # How many catalog rows in the same (family_root, cost) class this
+    # entry represents — 1 for a unique row, N > 1 when the renderer's
+    # family-dedup collapsed N-1 alias/snapshot siblings into this one.
+    # The MCP `compare_providers` tool ships dedup enabled by default;
+    # set `include_snapshots=True` to disable, in which case every row
+    # is `variant_count=1`. Default is 1 so existing constructors
+    # (tests, ad-hoc result building) stay backward compatible.
+    variant_count: int = 1
 
 
 class CompareProvidersResult(ResultBase):

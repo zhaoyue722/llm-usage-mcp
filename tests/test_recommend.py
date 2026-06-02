@@ -527,3 +527,180 @@ def test_recommend_alternatives_drawn_from_full_pool_on_over_budget_fallback(
         ("openai", "mid-1"),
         ("anthropic", "premium-1"),
     ]
+
+
+# --- family-dedup alternatives ------------------------------------------
+
+
+@pytest.fixture
+def family_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """DB with alias/snapshot family clusters for dedup tests."""
+    db = tmp_path / "usage.db"
+    monkeypatch.setenv("LLM_USAGE_DB_URL", f"sqlite:///{db}")
+    migrate_to_head()
+    with get_session() as session:
+        upsert_pricing(
+            session,
+            [
+                # qwen-foo family (cheapest), 4 catalog rows at identical price.
+                Pricing("qwen", "qwen-foo", 1.0, 2.0, fetched_at=1),
+                Pricing("qwen", "qwen-foo-2024-11-01", 1.0, 2.0, fetched_at=1),
+                Pricing("qwen", "qwen-foo-2025-04-28", 1.0, 2.0, fetched_at=1),
+                Pricing("qwen", "qwen-foo-latest", 1.0, 2.0, fetched_at=1),
+                # Different family inside qwen — should NOT be skipped
+                # by alternative family-dedup.
+                Pricing("qwen", "qwen-bar", 2.0, 4.0, fetched_at=1),
+                # OpenAI family: alias + snapshot at the same price.
+                Pricing("openai", "gpt-mid", 3.0, 6.0, fetched_at=1),
+                Pricing("openai", "gpt-mid-2025-08-07", 3.0, 6.0, fetched_at=1),
+                # Anthropic, unique family.
+                Pricing("anthropic", "claude-x", 5.0, 10.0, fetched_at=1),
+            ],
+        )
+        session.commit()
+    return db
+
+
+def test_recommend_alternatives_skip_alias_variants_of_chosen(
+    family_db: Path,
+) -> None:
+    """Chosen = qwen-foo (cheapest in family). The 3 sibling
+    snapshots/alias variants must be skipped from alternatives —
+    they're the same logical model."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+        )
+    assert r.model == "qwen-foo"
+    alt_models = [a.model for a in r.alternatives]
+    assert "qwen-foo-2024-11-01" not in alt_models
+    assert "qwen-foo-2025-04-28" not in alt_models
+    assert "qwen-foo-latest" not in alt_models
+
+
+def test_recommend_alternatives_skip_alias_variants_of_prior_alternatives(
+    family_db: Path,
+) -> None:
+    """When `gpt-mid` and `gpt-mid-2025-08-07` would otherwise both
+    qualify as alternatives, only the alias appears — the snapshot is
+    skipped because the family root is already represented."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+        )
+    alt_models = [a.model for a in r.alternatives]
+    # gpt-mid-2025-08-07 must NOT appear (gpt-mid already represents the family).
+    assert "gpt-mid-2025-08-07" not in alt_models
+
+
+def test_recommend_alternatives_pick_distinct_families_in_order(
+    family_db: Path,
+) -> None:
+    """With qwen-foo as the chosen row, the alternatives should be
+    `qwen-bar` (next-cheapest different family) and `gpt-mid` (next
+    after that). Pins the family-aware walk order."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+        )
+    alt_models = [a.model for a in r.alternatives]
+    assert alt_models == ["qwen-bar", "gpt-mid"]
+
+
+# --- tie reasoning -------------------------------------------------------
+
+
+@pytest.fixture
+def tied_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """DB where the cheapest row ties with two distinct-family rows.
+
+    Three families (alpha, beta, gamma) at identical $1/M+$2/M. Picked
+    = alpha-1 (alphabetical), tied_distinct_families = 2. Plus an
+    alpha-1-2025-01-01 alias variant — must NOT count as a distinct-
+    family tie since it's the same family as alpha-1.
+    """
+    db = tmp_path / "usage.db"
+    monkeypatch.setenv("LLM_USAGE_DB_URL", f"sqlite:///{db}")
+    migrate_to_head()
+    with get_session() as session:
+        upsert_pricing(
+            session,
+            [
+                Pricing("provider-a", "alpha-1", 1.0, 2.0, fetched_at=1),
+                Pricing("provider-a", "alpha-1-2025-01-01", 1.0, 2.0, fetched_at=1),
+                Pricing("provider-b", "beta-1", 1.0, 2.0, fetched_at=1),
+                Pricing("provider-c", "gamma-1", 1.0, 2.0, fetched_at=1),
+            ],
+        )
+        session.commit()
+    return db
+
+
+def test_recommend_reasoning_surfaces_tie_count(tied_db: Path) -> None:
+    """When the chosen row ties with 2 other distinct-family rows,
+    the reasoning should say `Tied with 2 other models at $X.XXXX`."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+        )
+    assert "Tied with 2 other models" in r.reasoning
+    assert "picked alphabetically" in r.reasoning
+
+
+def test_recommend_reasoning_tie_count_singular_form(tied_db: Path) -> None:
+    """When the tie count is exactly 1, the reasoning should use the
+    singular `1 other model` (not `1 other models`)."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            # Restrict to two families so we get exactly one tie.
+            models=["alpha-1", "beta-1"],
+        )
+    assert "Tied with 1 other model at" in r.reasoning
+
+
+def test_recommend_reasoning_tie_count_excludes_alias_variants(
+    tied_db: Path,
+) -> None:
+    """alpha-1 and alpha-1-2025-01-01 are aliases — they must NOT
+    count as a 'tied other model.' Only beta-1 and gamma-1 should
+    register as distinct-family ties."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+        )
+    # Distinct ties = beta-1, gamma-1 → 2. NOT 3.
+    assert "Tied with 2 other models" in r.reasoning
+
+
+def test_recommend_reasoning_no_tie_note_when_unique_winner(
+    priced_db: Path,
+) -> None:
+    """When the chosen row's price is uniquely cheapest, no tie note
+    should appear — `Tied with` must not show up in the reasoning."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="anything",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+        )
+    assert "Tied with" not in r.reasoning

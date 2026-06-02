@@ -68,6 +68,11 @@ select = [
 ignore = [
     "E501",  # line too long (handled by formatter)
 ]
+# `×` (U+00D7, MULTIPLICATION SIGN) is used deliberately as the
+# "times N" marker in the `compare` renderer's variant column
+# (e.g., `×4`). Ruff's confusable-character check would otherwise
+# flag it as visually ambiguous with `x` (U+0078); explicit allow.
+allowed-confusables = ["×"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]  # allow assert in tests

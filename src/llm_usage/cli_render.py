@@ -158,6 +158,14 @@ def format_compare_result(
     # is cheapest-first, so the last row is the max.
     max_ratio = result.ranked[-1].relative_cost_pct / 100.0
 
+    # `×N` variant column. Width is set by the widest count actually
+    # rendered (`×N` with `len(str(N)) + 1`); 0 when no row has
+    # `variant_count > 1`, in which case the column is omitted entirely
+    # so a default-on dedup with nothing actually collapsed prints
+    # the same as before — no spurious empty trailing column.
+    variant_w = _variant_column_width(result.ranked)
+    show_variants = variant_w > 0
+
     lines: list[str] = [
         _style(
             f"projecting cost for {_format_tokens(input_tokens)} in"
@@ -177,13 +185,37 @@ def format_compare_result(
                 model_w=model_w,
                 bar_width=bar_width,
                 max_ratio=max_ratio,
+                variant_w=variant_w,
                 color_enabled=color_enabled,
             )
         )
 
     lines.append(_style(_DIVIDER, color_enabled, dim=True))
     lines.append(_style("note: cache pricing not applied (use --cache)", color_enabled, dim=True))
+    if show_variants:
+        lines.append(
+            _style(
+                "note: ×N indicates N collapsed catalog variants (--all to see)",
+                color_enabled,
+                dim=True,
+            )
+        )
     return "\n".join(lines)
+
+
+def _variant_column_width(ranked: list[RankedEntry]) -> int:
+    """Column width for the optional `×N` annotation. 0 when not needed.
+
+    Returns the width of the widest `×N` string among rows where
+    `variant_count > 1`. When no row has collapsed variants (either
+    because `include_snapshots=True` was passed or no families
+    collapsed naturally), returns 0 so the renderer can skip the
+    column entirely.
+    """
+    max_count = max((e.variant_count for e in ranked if e.variant_count > 1), default=1)
+    if max_count <= 1:
+        return 0
+    return len(f"×{max_count}")
 
 
 def _format_row(
@@ -194,6 +226,7 @@ def _format_row(
     model_w: int,
     bar_width: int,
     max_ratio: float,
+    variant_w: int,
     color_enabled: bool,
 ) -> str:
     """One data row. The winner row is bold-green; others heat the Pct% column."""
@@ -215,6 +248,7 @@ def _format_row(
     # Compose the line as plain text first so column widths are stable
     # regardless of color escapes.
     raw = f"{provider}  {model}  {bar}  {cost:>8}  {pct}"
+    raw += _variant_suffix(entry.variant_count, variant_w)
 
     if not color_enabled:
         return raw
@@ -222,9 +256,30 @@ def _format_row(
     if is_winner:
         return click.style(raw, fg="green", bold=True)
 
-    # Non-winner rows: heat the (already-padded) Pct% column only.
+    # Non-winner rows: heat the (already-padded) Pct% column only,
+    # leaving the variant column in its dim default. Variant suffix
+    # has its own dim styling pass so it doesn't pick up the heat
+    # color.
     styled_pct = _style_pct(pct, ratio)
-    return f"{provider}  {model}  {bar}  {cost:>8}  {styled_pct}"
+    base = f"{provider}  {model}  {bar}  {cost:>8}  {styled_pct}"
+    if variant_w == 0:
+        return base
+    variant_text = _variant_suffix(entry.variant_count, variant_w)
+    return base + _style(variant_text, color_enabled, dim=True)
+
+
+def _variant_suffix(variant_count: int, variant_w: int) -> str:
+    """Right-padded `   ×N` text, or whitespace of the same width if N≤1.
+
+    Called even when `variant_w == 0` (which yields an empty string),
+    so callers don't have to special-case "no column."
+    """
+    if variant_w == 0:
+        return ""
+    if variant_count <= 1:
+        # Blank cell of the same width as `×N` to keep column alignment.
+        return "   " + " " * variant_w
+    return "   " + f"×{variant_count}".rjust(variant_w)
 
 
 def _bar_cells(ratio: float, max_ratio: float, width: int) -> int:

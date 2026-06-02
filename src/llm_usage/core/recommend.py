@@ -35,7 +35,13 @@ from typing import Final
 from sqlalchemy.orm import Session
 
 from llm_usage.core.models import Alternative, RecommendProviderResult
-from llm_usage.core.pricing import CostCalculator, Pricing, all_pricing, nano_to_usd
+from llm_usage.core.pricing import (
+    CostCalculator,
+    Pricing,
+    all_pricing,
+    family_root,
+    nano_to_usd,
+)
 
 # Workload assumed when the caller doesn't pass `expected_input_tokens`
 # / `expected_output_tokens`. 1k/1k is a generic chat-style turn — large
@@ -126,18 +132,8 @@ def recommend(
     # useful than raising. The reasoning makes the situation explicit.
     pool = candidates if over_budget else affordable
     chosen_pricing, chosen_cost_nano = pool[0]
-    # Take the next-cheapest entries from the *same pool* the chosen
-    # row came from, so alternatives don't contradict the filter or
-    # the budget fallback. Empty list when there's only one element
-    # — the renderer uses this as a signal to skip the section.
-    alternatives = [
-        Alternative(
-            provider=p.provider,
-            model=p.model,
-            estimated_cost_usd=nano_to_usd(cost_nano),
-        )
-        for p, cost_nano in pool[1 : 1 + _DEFAULT_ALTERNATIVES_COUNT]
-    ]
+    alternatives = _build_alternatives(pool, chosen_pricing)
+    tied_distinct_families = _count_distinct_family_ties(pool, chosen_pricing, chosen_cost_nano)
 
     reasoning = _build_reasoning(
         task_description=task_description,
@@ -150,6 +146,7 @@ def recommend(
         tokens_flag_names=tokens_flag_names,
         budget_usd=budget_usd,
         over_budget=over_budget,
+        tied_distinct_families=tied_distinct_families,
     )
     return RecommendProviderResult(
         provider=chosen_pricing.provider,
@@ -158,6 +155,65 @@ def recommend(
         alternatives=alternatives,
         reasoning=reasoning,
     )
+
+
+def _build_alternatives(pool: list[tuple[Pricing, int]], chosen: Pricing) -> list[Alternative]:
+    """Pick up to `_DEFAULT_ALTERNATIVES_COUNT` runner-ups from `pool`.
+
+    Walks `pool` after the chosen row and keeps entries whose family
+    root hasn't been surfaced yet — so an alias/snapshot variant of an
+    already-listed model (or of the chosen row) is skipped. This
+    matches the user-visible behavior of `compare`'s default dedup:
+    alternatives are *distinct logical models*, not catalog rows.
+
+    Skipping family-duplicates only when they share the chosen row's
+    or an already-listed alternative's family root — different-family
+    entries are independent. When prices diverge within a family the
+    second entry **does** appear (e.g., `qwen-turbo $0.0003` chosen,
+    `qwen-turbo-2025-04-28 $0.0002` would have already won as chosen;
+    this case doesn't apply since alternatives are always *more*
+    expensive than the chosen row).
+    """
+    seen_families: set[str] = {family_root(chosen.model)}
+    alternatives: list[Alternative] = []
+    for pricing, cost_nano in pool[1:]:
+        root = family_root(pricing.model)
+        if root in seen_families:
+            continue
+        seen_families.add(root)
+        alternatives.append(
+            Alternative(
+                provider=pricing.provider,
+                model=pricing.model,
+                estimated_cost_usd=nano_to_usd(cost_nano),
+            )
+        )
+        if len(alternatives) >= _DEFAULT_ALTERNATIVES_COUNT:
+            break
+    return alternatives
+
+
+def _count_distinct_family_ties(
+    pool: list[tuple[Pricing, int]], chosen: Pricing, chosen_cost_nano: int
+) -> int:
+    """Number of **distinct-family** rows in `pool` tied with the chosen cost.
+
+    Counts only families *other* than the chosen row's — same-family
+    rows tied on cost are alias/snapshot duplicates of the same logical
+    model, not "tied alternatives." For the reasoning string we want
+    "tied with N other model(s)" to mean *different* models, so this
+    function deduplicates by family root the same way alternatives do.
+    """
+    chosen_root = family_root(chosen.model)
+    tied_families: set[str] = set()
+    for pricing, cost_nano in pool:
+        if cost_nano != chosen_cost_nano:
+            continue
+        root = family_root(pricing.model)
+        if root == chosen_root:
+            continue
+        tied_families.add(root)
+    return len(tied_families)
 
 
 def _apply_filters(
@@ -250,6 +306,7 @@ def _build_reasoning(
     tokens_flag_names: tuple[str, str],
     budget_usd: float | None,
     over_budget: bool,
+    tied_distinct_families: int,
 ) -> str:
     """Natural-language explanation of the recommendation."""
     cost_usd = nano_to_usd(chosen_cost_nano)
@@ -259,6 +316,7 @@ def _build_reasoning(
         workload += f" (nominal defaults — specify {in_flag} / {out_flag} for a precise estimate)"
 
     chosen_name = f"{chosen_pricing.provider}/{chosen_pricing.model}"
+    tie_note = _tie_note(tied_distinct_families, cost_usd)
 
     if over_budget:
         assert budget_usd is not None
@@ -266,15 +324,38 @@ def _build_reasoning(
             f"For task {task_description!r}: no priced model fits a "
             f"${budget_usd:.4f} budget at {workload}. Recommending the "
             f"cheapest available, {chosen_name} (estimated ${cost_usd:.4f}). "
-            f"Raise the budget or narrow the workload to fit."
+            f"Raise the budget or narrow the workload to fit.{tie_note}"
         )
 
     budget_note = f" within a ${budget_usd:.4f} budget" if budget_usd is not None else ""
     return (
         f"For task {task_description!r}{budget_note}: recommending {chosen_name} — "
         f"the cheapest projected cost among {pool_size} priced model(s). Estimated "
-        f"${cost_usd:.4f} for {workload}. v1 ranks by cost only; "
+        f"${cost_usd:.4f} for {workload}.{tie_note} v1 ranks by cost only; "
         f"task_description is echoed for context but does not drive selection."
+    )
+
+
+def _tie_note(tied_distinct_families: int, cost_usd: float) -> str:
+    """Reasoning fragment surfacing same-cost ties with other models.
+
+    Empty when no other distinct-family rows share the chosen cost.
+    Lead space included so callers can concatenate directly.
+
+    The note is **transparent, not directive**: it tells the user
+    "here's how the tie-break landed" rather than recommending they
+    pick differently. The actual runner-ups are visible in the
+    `alternatives` field; the reasoning just acknowledges the tie
+    exists so a deterministic alphabetical pick doesn't feel magic.
+    """
+    if tied_distinct_families == 0:
+        return ""
+    others = (
+        "1 other model" if tied_distinct_families == 1 else f"{tied_distinct_families} other models"
+    )
+    return (
+        f" Tied with {others} at ${cost_usd:.4f}; picked alphabetically. "
+        f"See alternatives for the tied options."
     )
 
 

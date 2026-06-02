@@ -74,6 +74,7 @@ def _compare(
     expected_input_tokens: int,
     expected_output_tokens: int,
     models: list[str] | None = None,
+    include_snapshots: bool = False,
 ) -> CompareProvidersResult:
     # `@server.tool()` erases the return type for mypy's view; the local
     # annotation pins it back to the real `*Result` model.
@@ -82,6 +83,7 @@ def _compare(
             expected_input_tokens=expected_input_tokens,
             expected_output_tokens=expected_output_tokens,
             models=models,
+            include_snapshots=include_snapshots,
         )
     )
     return result
@@ -172,3 +174,112 @@ def test_notes_always_none_in_v1(priced_db: Path) -> None:
     result = _compare(expected_input_tokens=100, expected_output_tokens=100)
     assert result.ranked
     assert all(entry.notes is None for entry in result.ranked)
+
+
+# --- family dedup --------------------------------------------------------
+
+
+def _family_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """DB with a family-rich pricing set for dedup tests.
+
+    The four `qwen-foo*` rows share family root `qwen-foo` at identical
+    rates (so they collapse into one entry with variant_count=4 when
+    dedup is on). The two `gpt-bar*` rows share family root `gpt-bar`
+    at DIFFERENT rates (so both survive even with dedup on). The
+    `claude-baz` row is a unique-family canonical name (variant_count=1).
+    """
+    db = tmp_path / "usage.db"
+    monkeypatch.setenv("LLM_USAGE_DB_URL", f"sqlite:///{db}")
+    migrate_to_head()
+    with get_session() as session:
+        upsert_pricing(
+            session,
+            [
+                # Family `qwen-foo` — alias + two snapshots + `-latest`,
+                # all at $1/M in + $2/M out. Dedup → one row, variant=4.
+                Pricing("qwen", "qwen-foo", 1.0, 2.0, fetched_at=1),
+                Pricing("qwen", "qwen-foo-2024-11-01", 1.0, 2.0, fetched_at=1),
+                Pricing("qwen", "qwen-foo-2025-04-28", 1.0, 2.0, fetched_at=1),
+                Pricing("qwen", "qwen-foo-latest", 1.0, 2.0, fetched_at=1),
+                # Family `gpt-bar` — alias and snapshot at DIFFERENT
+                # prices. Both must survive (price divergence ≠ noise).
+                Pricing("openai", "gpt-bar", 3.0, 6.0, fetched_at=1),
+                Pricing("openai", "gpt-bar-2025-08-07", 2.0, 4.0, fetched_at=1),
+                # Unique-family row.
+                Pricing("anthropic", "claude-baz", 5.0, 10.0, fetched_at=1),
+            ],
+        )
+        session.commit()
+    return db
+
+
+def test_compare_default_collapses_same_price_family_variants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """4 qwen-foo* rows priced identically → 1 entry with variant_count=4."""
+    _family_db(tmp_path, monkeypatch)
+    result = _compare(expected_input_tokens=1_000_000, expected_output_tokens=1_000_000)
+    by_family = {entry.model: entry for entry in result.ranked}
+    assert "qwen-foo" in by_family  # canonical (alias) wins the lex tie-break
+    assert by_family["qwen-foo"].variant_count == 4
+    # No snapshot variants leak through.
+    assert "qwen-foo-2024-11-01" not in by_family
+    assert "qwen-foo-latest" not in by_family
+
+
+def test_compare_default_keeps_different_price_family_variants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """gpt-bar and gpt-bar-2025-08-07 share a family root but have
+    different prices — both rows must survive (no silent collapse)."""
+    _family_db(tmp_path, monkeypatch)
+    result = _compare(expected_input_tokens=1_000_000, expected_output_tokens=1_000_000)
+    models = [entry.model for entry in result.ranked]
+    assert "gpt-bar" in models
+    assert "gpt-bar-2025-08-07" in models
+    # Each is its own row, each variant_count=1.
+    by_model = {entry.model: entry for entry in result.ranked}
+    assert by_model["gpt-bar"].variant_count == 1
+    assert by_model["gpt-bar-2025-08-07"].variant_count == 1
+
+
+def test_compare_default_dedup_picks_alphabetically_first_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Within a (family, cost) class the alphabetically-first entry
+    wins. `qwen-foo` < `qwen-foo-2024-11-01` < `qwen-foo-2025-04-28` <
+    `qwen-foo-latest`, so the alias is the kept representative."""
+    _family_db(tmp_path, monkeypatch)
+    result = _compare(expected_input_tokens=1_000_000, expected_output_tokens=1_000_000)
+    qwen_rows = [entry for entry in result.ranked if entry.provider == "qwen"]
+    assert len(qwen_rows) == 1
+    assert qwen_rows[0].model == "qwen-foo"
+
+
+def test_compare_include_snapshots_returns_every_catalog_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With `include_snapshots=True` the dedup is disabled — every
+    catalog row appears as its own entry with variant_count=1."""
+    _family_db(tmp_path, monkeypatch)
+    result = _compare(
+        expected_input_tokens=1_000_000,
+        expected_output_tokens=1_000_000,
+        include_snapshots=True,
+    )
+    models = [entry.model for entry in result.ranked]
+    assert "qwen-foo" in models
+    assert "qwen-foo-2024-11-01" in models
+    assert "qwen-foo-2025-04-28" in models
+    assert "qwen-foo-latest" in models
+    # Every row is solo.
+    assert all(entry.variant_count == 1 for entry in result.ranked)
+
+
+def test_compare_default_unique_families_keep_variant_count_one(
+    priced_db: Path,
+) -> None:
+    """With the standard fixture (three distinct family roots, no
+    alias/snapshot variants), every row should report variant_count=1."""
+    result = _compare(expected_input_tokens=100, expected_output_tokens=100)
+    assert all(entry.variant_count == 1 for entry in result.ranked)

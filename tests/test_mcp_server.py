@@ -59,6 +59,7 @@ _EXPECTED_TOOL_INPUTS: dict[str, set[str]] = {
         "expected_input_tokens",
         "expected_output_tokens",
         "models",
+        "include_snapshots",
     },
     "recommend_provider": {
         "task_description",

@@ -258,6 +258,94 @@ def test_color_enabled_dims_header_divider_and_footnote() -> None:
     assert "2" in _extract_ansi_codes(lines[4])  # footnote
 
 
+# --- ×N variant column ---------------------------------------------------
+
+
+def _ranked_with_variants(
+    *entries: tuple[str, str, float, float, int],
+) -> CompareProvidersResult:
+    """Like `_ranked` but each entry carries an explicit `variant_count`.
+
+    Tuple shape: (provider, model, cost_usd, relative_cost_pct, variant_count).
+    """
+    return CompareProvidersResult(
+        ranked=[
+            RankedEntry(
+                provider=p,
+                model=m,
+                cost_usd=c,
+                relative_cost_pct=pct,
+                notes=None,
+                variant_count=vc,
+            )
+            for p, m, c, pct, vc in entries
+        ]
+    )
+
+
+def test_variant_column_hidden_when_no_row_has_collapsed_variants() -> None:
+    """All rows at variant_count=1 → no `×N` column, no extra footer.
+    Default-on dedup with nothing actually collapsed must look identical
+    to the pre-dedup output for catalogs without alias-family clusters."""
+    result = _ranked_with_variants(
+        ("openai", "a", 0.001, 100.0, 1),
+        ("openai", "b", 0.002, 200.0, 1),
+    )
+    out = format_compare_result(result, input_tokens=100, output_tokens=100, color_enabled=False)
+    assert "×" not in out
+    assert "collapsed catalog variants" not in out
+
+
+def test_variant_column_renders_when_any_row_has_collapsed_variants() -> None:
+    """A single row at variant_count>1 should trigger the `×N` column
+    and the explanatory footer line."""
+    result = _ranked_with_variants(
+        ("qwen", "qwen-turbo", 0.0003, 100.0, 4),  # 4 catalog variants
+        ("deepseek", "deepseek-coder", 0.0004, 168.0, 1),  # solo
+    )
+    out = format_compare_result(result, input_tokens=100, output_tokens=100, color_enabled=False)
+    qwen_line = next(line for line in out.split("\n") if "qwen-turbo" in line)
+    deepseek_line = next(line for line in out.split("\n") if "deepseek-coder" in line)
+    assert "×4" in qwen_line
+    # Solo rows must NOT carry a ×1 marker — only the column padding.
+    assert "×" not in deepseek_line
+    # Footer note explaining the convention.
+    assert "×N indicates N collapsed catalog variants" in out
+
+
+def test_variant_column_aligns_x_marker_across_rows() -> None:
+    """When the count widths differ (×4 vs ×12), the right edge of the
+    column should align so the `×` characters stack vertically."""
+    result = _ranked_with_variants(
+        ("openai", "a", 0.001, 100.0, 4),
+        ("openai", "b", 0.002, 200.0, 12),
+    )
+    out = format_compare_result(result, input_tokens=100, output_tokens=100, color_enabled=False)
+    # Data rows are the ones with both a bar glyph AND the variant marker;
+    # the footer line carries `×N indicates...` but no bar.
+    data_lines = [line for line in out.split("\n") if "▅" in line and "×" in line]
+    # Both should end with the marker; compare from the right edge so
+    # the column is right-aligned.
+    assert len(data_lines) == 2
+    assert data_lines[0].rstrip().endswith("×4")
+    assert data_lines[1].rstrip().endswith("×12")
+    # Both lines must have the same total length once stripped.
+    plain_lines = [_ANSI_RE.sub("", line) for line in data_lines]
+    assert len(plain_lines[0]) == len(plain_lines[1])
+
+
+def test_variant_column_dim_when_color_enabled() -> None:
+    """`×N` text should carry the dim attribute (SGR 2), so it's
+    visually subordinate to the bar/cost/pct columns."""
+    result = _ranked_with_variants(
+        ("openai", "winner", 0.001, 100.0, 1),  # winner row (no dim needed)
+        ("openai", "other", 0.002, 200.0, 3),  # non-winner with variants
+    )
+    out = format_compare_result(result, input_tokens=100, output_tokens=100, color_enabled=True)
+    other_line = next(line for line in out.split("\n") if "other" in line)
+    assert "2" in _extract_ansi_codes(other_line)  # dim somewhere on the line
+
+
 # --- alignment: styled vs unstyled rows -----------------------------------
 
 

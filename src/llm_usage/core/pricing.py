@@ -15,14 +15,60 @@ The MCP layer converts to float USD at the API boundary.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import Final
 
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from llm_usage.core.db.models import PricingSnapshot, PricingTier
+
+# Trailing patterns that mark a pricing row as an alias/pinned-snapshot
+# variant of a "canonical" model. Stripping these from a model name
+# yields its **family root** — two rows sharing a family root are
+# typically the same logical model under different catalog names
+# (alias + dated snapshot). LiteLLM's catalog frequently lists multiple
+# variants at identical prices (`gpt-5-mini` and `gpt-5-mini-2025-08-07`,
+# `qwen-turbo` and `qwen-turbo-latest`, etc.); display tools dedup by
+# `(family_root, cost)` so the user sees one row per distinct
+# (model-family, price) pair instead of N copies of the same model.
+#
+# Patterns covered:
+#   `-YYYY-MM-DD`       e.g. `gpt-5-mini-2025-08-07`
+#   `-YYYYMMDD`         e.g. `claude-opus-4-7-20260416`
+#   `-latest`           e.g. `qwen-turbo-latest`
+#
+# Order matters: longer/more-specific patterns first. The match is
+# anchored at end-of-string and is greedy enough that "weird" suffixes
+# (a model name that incidentally ends with `-2024-01-01` for an
+# unrelated reason) collapse with their family — acceptable since the
+# alternative is keeping clutter and no provider in v1's catalog has
+# such a name.
+_FAMILY_SUFFIX_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(r"-\d{4}-\d{2}-\d{2}$"),
+    re.compile(r"-\d{8}$"),
+    re.compile(r"-latest$"),
+)
+
+
+def family_root(model: str) -> str:
+    """Strip alias/snapshot suffixes from `model` to find its family root.
+
+    Returns the original string when no pattern matches (the row is
+    already a canonical name like `deepseek-coder` or `qwen-flash`).
+    Shared by `core/compare` and `core/recommend` for family-aware
+    dedup; the function is a pure string transform with no DB
+    dependency, so callers can use it without a session.
+    """
+    for pattern in _FAMILY_SUFFIX_PATTERNS:
+        stripped = pattern.sub("", model)
+        if stripped != model:
+            return stripped
+    return model
+
 
 # 1 USD = 1e9 nano-USD; rates are per-million-USD, so per-token cost in
 # nano-USD = tokens * rate * (1e9 / 1e6) = tokens * rate * 1_000.

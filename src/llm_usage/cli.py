@@ -114,6 +114,16 @@ def compare(
             "`--model a --model b`. Default: every priced model."
         ),
     ),
+    show_all: bool = typer.Option(
+        False,
+        "--all",
+        help=(
+            "Show every catalog row, including alias/snapshot variants that "
+            "share a price (e.g., `gpt-5-mini` and `gpt-5-mini-2025-08-07`). "
+            "Default: collapse same-price same-family variants into one row "
+            "with ×N indicating the catalog count."
+        ),
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -137,7 +147,16 @@ def compare(
     Cheapest first, with `%` measured against the cheapest entry
     (cheapest = 100%). Cost is computed from input/output tokens only
     in v1; cache pricing is shown as a footnote so users know it's not
-    yet applied. `--json` returns the same Pydantic shape the MCP
+    yet applied.
+
+    Default view family-dedups catalog rows that share both a model-
+    family root AND an identical projected cost — so `gpt-5-mini` and
+    `gpt-5-mini-2025-08-07` (alias + pinned snapshot, same price)
+    collapse to one row with `×2`. Pass `--all` to see every catalog
+    row. When variants in the same family have *different* prices
+    (rare but happens), both rows appear regardless of `--all`.
+
+    `--json` returns the same Pydantic shape the MCP
     `compare_providers` tool produces, so existing schemas / consumers
     work verbatim.
     """
@@ -147,6 +166,7 @@ def compare(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             models=models if models else None,
+            include_snapshots=show_all,
         )
 
     if json_output:
