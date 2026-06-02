@@ -1318,6 +1318,11 @@ def format_pricing_catalog(
         color_enabled=color_enabled,
     )
 
+    # Leader row = first entry when sorted by rate. With the default
+    # `provider` sort, the table is a catalog browse (no inherent
+    # winner) so no row gets the leader stripe.
+    leader_index = 0 if (sort != "provider" and rows) else -1
+
     data_lines = [
         _format_catalog_row(
             row,
@@ -1325,9 +1330,10 @@ def format_pricing_catalog(
             model_w=model_w,
             variant_w=variant_w,
             show_cache=show_cache,
+            is_leader=(i == leader_index),
             color_enabled=color_enabled,
         )
-        for row in rows
+        for i, row in enumerate(rows)
     ]
 
     footnotes = _catalog_footnotes(
@@ -1439,29 +1445,74 @@ def _format_catalog_row(
     model_w: int,
     variant_w: int,
     show_cache: bool,
+    is_leader: bool,
     color_enabled: bool,
 ) -> str:
-    """One data row. Cache cells render `—` when the model has no cache rate."""
+    """One data row.
+
+    Color treatment (per-column identity, matching `spend`):
+    - Provider: cyan (the branded column gets brand color)
+    - Model: default (the row's identity, no special emphasis)
+    - Input/M, Output/M: yellow (money)
+    - Cache R/M, Cache W/M: dim yellow (money, secondary)
+    - ×N: dim (informational, not data)
+
+    When `is_leader=True` (first row under `--sort input` / `--sort
+    output`), the entire row gets the bold-green leader stripe
+    instead — same convention as `compare`'s winner row. The leader
+    stripe wins over the per-column scheme so it's visually
+    distinctive; the user's eye lands on the cheapest row first.
+
+    Cache cells render `—` when the model has no cache rate.
+    Per-cell padding is applied **before** styling so ANSI escape
+    bytes don't inflate `len()` and knock subsequent columns out of
+    alignment.
+    """
     entry = row.entry
-    provider = _provider_display(entry.provider).ljust(provider_w)
-    model = entry.model.ljust(model_w)
-    input_rate = _format_rate(entry.input_per_million_usd).rjust(9)
-    output_rate = _format_rate(entry.output_per_million_usd).rjust(9)
+    provider_text = _provider_display(entry.provider).ljust(provider_w)
+    model_text = entry.model.ljust(model_w)
+    input_text = _format_rate(entry.input_per_million_usd).rjust(9)
+    output_text = _format_rate(entry.output_per_million_usd).rjust(9)
+    cache_read_text = (
+        _format_rate_or_dash(entry.cache_read_per_million_usd).rjust(10) if show_cache else None
+    )
+    cache_write_text = (
+        _format_rate_or_dash(entry.cache_write_per_million_usd).rjust(10) if show_cache else None
+    )
+    variant_text = _variant_suffix(row.variant_count, variant_w) if variant_w > 0 else ""
 
-    parts = [provider, model, input_rate, output_rate]
+    # Leader path: bold-green the entire assembled line (including
+    # variant suffix) and short-circuit. Matches the `compare` winner
+    # convention.
+    if is_leader and color_enabled:
+        parts = [provider_text, model_text, input_text, output_text]
+        if show_cache:
+            assert cache_read_text is not None and cache_write_text is not None
+            parts.extend([cache_read_text, cache_write_text])
+        raw = "  ".join(parts) + variant_text
+        return click.style(raw, fg="green", bold=True)
+
+    # Non-leader (or no-color) path: per-column styling. Each cell is
+    # pre-padded before styling so the visible widths line up
+    # regardless of ANSI escape lengths.
+    provider_styled = _style(provider_text, color_enabled, fg="cyan")
+    # Model column stays default-color — it's the row label, not data.
+    input_styled = _style(input_text, color_enabled, fg="yellow")
+    output_styled = _style(output_text, color_enabled, fg="yellow")
+
+    parts_styled: list[str] = [provider_styled, model_text, input_styled, output_styled]
     if show_cache:
-        parts.append(_format_rate_or_dash(entry.cache_read_per_million_usd).rjust(10))
-        parts.append(_format_rate_or_dash(entry.cache_write_per_million_usd).rjust(10))
-    raw = "  ".join(parts)
+        assert cache_read_text is not None and cache_write_text is not None
+        # Cache columns: yellow + dim. Money, but secondary signal.
+        parts_styled.append(_style(cache_read_text, color_enabled, fg="yellow", dim=True))
+        parts_styled.append(_style(cache_write_text, color_enabled, fg="yellow", dim=True))
 
+    line = "  ".join(parts_styled)
     if variant_w > 0:
-        raw += _variant_suffix(row.variant_count, variant_w)
-        if color_enabled and row.variant_count > 1:
-            # Dim only the variant suffix; leave the rest in default.
-            raw_no_variant = "  ".join(parts)
-            suffix = _variant_suffix(row.variant_count, variant_w)
-            return raw_no_variant + _style(suffix, color_enabled, dim=True)
-    return raw
+        # ×N gets dim styling on its own — leave the rest in their
+        # per-column colors.
+        line += _style(variant_text, color_enabled, dim=True)
+    return line
 
 
 def _format_rate(rate: float) -> str:

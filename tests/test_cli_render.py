@@ -1808,3 +1808,87 @@ def test_catalog_variant_marker_is_dim_when_color_enabled() -> None:
     )
     mini_line = next(line for line in out.split("\n") if "gpt-5-mini" in line)
     assert "2" in _extract_ansi_codes(mini_line)  # dim somewhere on the line
+
+
+# --- styling: per-column color scheme + leader row ---------------------
+
+
+def test_catalog_color_enabled_paints_provider_cyan_and_rates_yellow() -> None:
+    """Per-column scheme: provider in cyan, Input/M + Output/M in
+    yellow. The model column stays default (it's the row label, not
+    data). Same convention as `spend`."""
+    out = format_pricing_catalog(
+        [_pricing("openai", "gpt-x", input_rate=1.0, output_rate=2.0)],
+        color_enabled=True,
+    )
+    data_line = next(line for line in out.split("\n") if "gpt-x" in line)
+    codes = _extract_ansi_codes(data_line)
+    assert "36" in codes  # cyan (provider)
+    assert "33" in codes  # yellow (rate columns)
+
+
+def test_catalog_leader_row_under_rate_sort_gets_bold_green() -> None:
+    """When `sort` is by rate (input/output), the first row is the
+    cheapest in that axis — it gets the bold-green leader stripe,
+    same as `compare`'s winner row."""
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "cheap", input_rate=0.05, output_rate=0.1),
+            _pricing("anthropic", "expensive", input_rate=10.0, output_rate=20.0),
+        ],
+        sort="input",
+        color_enabled=True,
+    )
+    cheap_line = next(line for line in out.split("\n") if "cheap" in line)
+    expensive_line = next(line for line in out.split("\n") if "expensive" in line)
+    cheap_codes = _extract_ansi_codes(cheap_line)
+    expensive_codes = _extract_ansi_codes(expensive_line)
+    assert "32" in cheap_codes  # green (leader)
+    assert "1" in cheap_codes  # bold (leader)
+    # Expensive row stays in the per-column scheme — no green.
+    assert "32" not in expensive_codes
+
+
+def test_catalog_provider_sort_has_no_leader_row() -> None:
+    """Default `sort=provider` is a catalog browse — no inherent
+    winner, so no row gets the leader stripe. Pins the contract so a
+    future refactor can't accidentally always mark row 0 as leader."""
+    out = format_pricing_catalog(
+        [
+            _pricing("anthropic", "a", input_rate=10.0, output_rate=20.0),
+            _pricing("openai", "b", input_rate=0.05, output_rate=0.1),  # cheaper
+        ],
+        sort="provider",
+        color_enabled=True,
+    )
+    first_line = next(line for line in out.split("\n") if "anthropic" in line.lower())
+    # The Anthropic row is alphabetically first but expensive — must
+    # NOT carry the leader stripe.
+    assert "32" not in _extract_ansi_codes(first_line)
+
+
+def test_catalog_cache_cells_are_dim_yellow_when_shown() -> None:
+    """Cache columns are money (yellow) but secondary signal (dim).
+    Same scheme as the input/output columns minus the dim attribute."""
+    out = format_pricing_catalog(
+        [
+            _pricing(
+                "anthropic",
+                "claude-x",
+                input_rate=1.0,
+                output_rate=5.0,
+                cache_read=0.1,
+                cache_write=1.25,
+            )
+        ],
+        show_cache=True,
+        color_enabled=True,
+    )
+    data_line = next(line for line in out.split("\n") if "claude-x" in line)
+    codes = _extract_ansi_codes(data_line)
+    # Yellow (rate columns + cache columns).
+    assert "33" in codes
+    # Dim somewhere (cache columns wear it; the input/output columns
+    # don't, but the variant column would if present — without one
+    # here the dim must come from cache cells).
+    assert "2" in codes
