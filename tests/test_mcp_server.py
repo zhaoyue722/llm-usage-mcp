@@ -78,7 +78,7 @@ _EXPECTED_REQUIRED: dict[str, set[str]] = {
     "record_usage": {"provider", "model", "input_tokens", "output_tokens"},
     "query_spend": set(),
     "compare_providers": {"expected_input_tokens", "expected_output_tokens"},
-    "recommend_provider": {"task_description"},
+    "recommend_provider": set(),
     "get_pricing": set(),
     "usage_summary": set(),
     "list_providers": set(),

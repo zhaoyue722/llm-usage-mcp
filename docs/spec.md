@@ -305,7 +305,7 @@ Recommends the cheapest priced model that fits the workload + budget.
 
 ```yaml
 parameters:
-  task_description:  string required
+  task_description:  string optional
   expected_input_tokens:  integer optional
   expected_output_tokens: integer optional
   budget_usd:        number optional
@@ -362,7 +362,12 @@ returns:
 > importer; `quality_priority` returns at that point.
 > `task_description` is echoed into the `reasoning` string but does
 > not drive selection — the tool isn't an LLM and can't interpret
-> free text.
+> free text. It's **optional** in v1 (required-but-vestigial was a
+> UX trap forcing callers to invent garbage values); when omitted,
+> the `reasoning` opens with `"Recommending ..."` instead of the
+> `"For task 'X': recommending ..."` form. The field becomes
+> meaningful again when a future `quality_priority` axis lands
+> alongside a populated `quality_snapshot`.
 
 ### `get_pricing`
 

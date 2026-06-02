@@ -704,3 +704,76 @@ def test_recommend_reasoning_no_tie_note_when_unique_winner(
             expected_output_tokens=1_000_000,
         )
     assert "Tied with" not in r.reasoning
+
+
+# --- optional task_description -------------------------------------------
+
+
+def test_recommend_omitting_task_returns_no_task_reasoning(priced_db: Path) -> None:
+    """`task_description=None` (the new default) yields reasoning that
+    opens with 'Recommending' — no `For task '…':` prefix."""
+    with get_session() as session:
+        r = recommend(session)  # no task_description, no other args
+    assert r.reasoning.startswith("Recommending ")
+    assert "For task" not in r.reasoning
+
+
+def test_recommend_omitting_task_with_budget_opens_with_budget_clause(
+    priced_db: Path,
+) -> None:
+    """No task + budget should open `Within a $X budget: recommending …`
+    — clean grammar without the task scaffolding."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            budget_usd=5.0,
+        )
+    assert r.reasoning.startswith("Within a $5.0000 budget: recommending ")
+
+
+def test_recommend_omitting_task_over_budget_opens_with_no_priced_model(
+    priced_db: Path,
+) -> None:
+    """No task + over-budget should drop the task scaffolding from the
+    over-budget fallback message too — opens with 'No priced model…'."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            budget_usd=0.0001,
+        )
+    assert r.reasoning.startswith("No priced model fits a $0.0001 budget")
+
+
+def test_recommend_task_with_internal_capitals_is_preserved(priced_db: Path) -> None:
+    """Regression: `str.capitalize()` would lowercase trailing chars
+    in the task description (`'GPT-5 eval'` → `'gpt-5 eval'`). Our
+    `_lead_cap` helper avoids this; pin the behavior."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="GPT-5 internal eval",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+        )
+    # The internal capitals must survive verbatim into the reasoning.
+    assert "GPT-5 internal eval" in r.reasoning
+
+
+def test_recommend_task_with_internal_capitals_preserved_with_budget(
+    priced_db: Path,
+) -> None:
+    """Same guarantee under the budget path (which goes through
+    `_normal_opener` → `_lead_cap`)."""
+    with get_session() as session:
+        r = recommend(
+            session,
+            task_description="GPT-5 vs Claude-4-7 bake-off",
+            expected_input_tokens=1_000_000,
+            expected_output_tokens=1_000_000,
+            budget_usd=5.0,
+        )
+    assert "GPT-5 vs Claude-4-7 bake-off" in r.reasoning

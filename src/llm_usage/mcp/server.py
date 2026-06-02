@@ -250,7 +250,7 @@ async def compare_providers(
 
 @server.tool()
 async def recommend_provider(
-    task_description: str,
+    task_description: str | None = None,
     expected_input_tokens: int | None = None,
     expected_output_tokens: int | None = None,
     budget_usd: float | None = None,
@@ -279,8 +279,10 @@ async def recommend_provider(
     nothing raises rather than fabricating a result — likely a
     spelling error in the caller's name list.
 
-    `task_description` is echoed into the reasoning but does not drive
-    selection — the tool isn't an LLM and can't interpret free text.
+    `task_description` is **optional** and echoed into the reasoning
+    but does not drive selection — the tool isn't an LLM and can't
+    interpret free text. Omit it (or pass `None`) and the reasoning
+    opens with `"Recommending …"` instead of `"For task 'X': …"`.
     """
     with get_session() as session:
         return _recommend(

@@ -103,14 +103,21 @@ def test_recommend_short_flags_work(priced_db: Path, runner: CliRunner) -> None:
     assert "DeepSeek / cheap-1" in result.stdout
 
 
-def test_recommend_requires_task_flag(priced_db: Path, runner: CliRunner) -> None:
-    """`--task` is mandatory — without it, Typer should exit non-zero
-    and surface the missing argument in stderr (rich error output)."""
-    result = runner.invoke(app, ["recommend"])
-    assert result.exit_code != 0
-    plain = _ANSI_RE.sub("", result.stdout + result.output)
-    # Rich may wrap the flag name; check for the unambiguous substring.
-    assert "task" in plain.lower()
+def test_recommend_no_task_succeeds(priced_db: Path, runner: CliRunner) -> None:
+    """`--task` is **optional** — running `llm-usage recommend` with
+    no flags at all should pick a model and produce the no-task
+    reasoning form (`Recommending …` instead of `For task '…': …`)."""
+    result = runner.invoke(app, ["recommend", "--color", "never"])
+    assert result.exit_code == 0, result.stdout
+    assert "Recommendation" in result.stdout
+    # No-task reasoning opens with "Recommending" — not "For task".
+    # `For task` only appears mid-sentence in that form, so a plain
+    # substring check on stdout is safe.
+    assert "For task" not in result.stdout
+    # The v1 disclosure phrase appears across the reasoning, but Rich
+    # word-wraps it at 78 cols so check via the whitespace-normalized
+    # view so we don't false-fail on a mid-phrase line break.
+    assert "v1 ranks by cost only" in _normalize(result.stdout)
 
 
 # --- defaults plumbed through -------------------------------------------
@@ -485,3 +492,39 @@ def test_recommend_human_output_omits_alternatives_when_pool_is_one(
     assert result.exit_code == 0, result.stdout
     assert "Alternatives" not in result.stdout
     assert "Reasoning" in result.stdout  # other sections still render
+
+
+# --- optional --task ----------------------------------------------------
+
+
+def test_recommend_no_task_no_other_flags_succeeds(priced_db: Path, runner: CliRunner) -> None:
+    """`llm-usage recommend` with no flags at all is valid in v1 —
+    every parameter has a sensible default."""
+    result = runner.invoke(app, ["recommend", "--color", "never"])
+    assert result.exit_code == 0, result.stdout
+    assert "Recommendation" in result.stdout
+
+
+def test_recommend_no_task_reasoning_omits_for_task_prefix(
+    priced_db: Path, runner: CliRunner
+) -> None:
+    """The reasoning should open with 'Recommending' instead of
+    'For task …' when no `--task` is passed."""
+    result = runner.invoke(app, ["recommend", "--color", "never"])
+    plain = result.stdout
+    # The "For task '...':" prefix must not appear anywhere.
+    assert "For task" not in plain
+    # The v1 disclosure phrase appears in the reasoning but Rich
+    # word-wraps it; check the normalized view.
+    assert "v1 ranks by cost only" in _normalize(plain)
+
+
+def test_recommend_no_task_with_budget_renders_budget_opener(
+    priced_db: Path, runner: CliRunner
+) -> None:
+    result = runner.invoke(
+        app,
+        ["recommend", "--in", "1000000", "--out", "1000000", "-b", "5", "--color", "never"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "Within a $5.0000 budget: recommending" in result.stdout

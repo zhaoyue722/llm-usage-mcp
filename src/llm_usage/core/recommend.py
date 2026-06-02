@@ -72,7 +72,7 @@ _DEFAULT_TOKEN_FLAGS: Final[tuple[str, str]] = (
 def recommend(
     session: Session,
     *,
-    task_description: str,
+    task_description: str | None = None,
     expected_input_tokens: int | None = None,
     expected_output_tokens: int | None = None,
     budget_usd: float | None = None,
@@ -296,7 +296,7 @@ def _project_costs(
 
 def _build_reasoning(
     *,
-    task_description: str,
+    task_description: str | None,
     chosen_pricing: Pricing,
     chosen_cost_nano: int,
     pool_size: int,
@@ -308,7 +308,16 @@ def _build_reasoning(
     over_budget: bool,
     tied_distinct_families: int,
 ) -> str:
-    """Natural-language explanation of the recommendation."""
+    """Natural-language explanation of the recommendation.
+
+    When `task_description` is `None` the reasoning opens with
+    `"Recommending ..."` instead of `"For task 'X': recommending ..."`,
+    so a caller that doesn't care about the task field doesn't have to
+    surface a placeholder string in the output. Budget is folded into
+    the opener too — `"For task 'X' within a $5 budget:"`,
+    `"Within a $5 budget:"`, or just `"Recommending"` — depending on
+    which axes the caller specified.
+    """
     cost_usd = nano_to_usd(chosen_cost_nano)
     workload = f"{input_tokens:,} input / {output_tokens:,} output tokens"
     if tokens_defaulted:
@@ -320,20 +329,72 @@ def _build_reasoning(
 
     if over_budget:
         assert budget_usd is not None
+        head = _over_budget_opener(task_description, budget_usd)
         return (
-            f"For task {task_description!r}: no priced model fits a "
-            f"${budget_usd:.4f} budget at {workload}. Recommending the "
+            f"{head} at {workload}. Recommending the "
             f"cheapest available, {chosen_name} (estimated ${cost_usd:.4f}). "
             f"Raise the budget or narrow the workload to fit.{tie_note}"
         )
 
-    budget_note = f" within a ${budget_usd:.4f} budget" if budget_usd is not None else ""
+    opener = _normal_opener(task_description, budget_usd)
     return (
-        f"For task {task_description!r}{budget_note}: recommending {chosen_name} — "
+        f"{opener} {chosen_name} — "
         f"the cheapest projected cost among {pool_size} priced model(s). Estimated "
         f"${cost_usd:.4f} for {workload}.{tie_note} v1 ranks by cost only; "
         f"task_description is echoed for context but does not drive selection."
     )
+
+
+def _normal_opener(task_description: str | None, budget_usd: float | None) -> str:
+    """Sentence opener for the under-budget path.
+
+    Composed from up to two clauses ("for task 'X'", "within a $5
+    budget") so the four combinations (task × budget) produce
+    grammatical English without if-pyramid duplication:
+
+        none, none      → `"Recommending"`
+        task, none      → `"For task 'X': recommending"`
+        none, budget    → `"Within a $5 budget: recommending"`
+        task, budget    → `"For task 'X' within a $5 budget: recommending"`
+    """
+    clauses: list[str] = []
+    if task_description is not None:
+        clauses.append(f"for task {task_description!r}")
+    if budget_usd is not None:
+        clauses.append(f"within a ${budget_usd:.4f} budget")
+    if not clauses:
+        return "Recommending"
+    joined = " ".join(clauses)
+    return f"{_lead_cap(joined)}: recommending"
+
+
+def _over_budget_opener(task_description: str | None, budget_usd: float) -> str:
+    """Sentence opener for the over-budget fallback path.
+
+    Always mentions the budget (it's the reason for the fallback).
+    The task clause is optional; when present, prepends `"For task
+    'X': "` before the budget-doesn't-fit phrase.
+
+        none      → `"No priced model fits a $5.0000 budget"`
+        task      → `"For task 'X': no priced model fits a $5.0000 budget"`
+    """
+    body = f"no priced model fits a ${budget_usd:.4f} budget"
+    if task_description is None:
+        return _lead_cap(body)
+    return f"For task {task_description!r}: {body}"
+
+
+def _lead_cap(text: str) -> str:
+    """Uppercase only the first character; preserve the rest verbatim.
+
+    `str.capitalize()` lowercases the trailing characters too, which
+    mangles task descriptions with internal capitals (`'GPT-5 eval'`
+    would become `'gpt-5 eval'`). This helper does the right thing.
+    Empty input returns empty.
+    """
+    if not text:
+        return text
+    return text[0].upper() + text[1:]
 
 
 def _tie_note(tied_distinct_families: int, cost_usd: float) -> str:

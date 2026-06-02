@@ -193,11 +193,15 @@ def compare(
 
 @app.command()
 def recommend(
-    task: str = typer.Option(
-        ...,
+    task: str | None = typer.Option(
+        None,
         "--task",
         "-t",
-        help="Free-form description of the work. Echoed into the reasoning; doesn't drive selection.",
+        help=(
+            "Optional free-form description. Echoed into the reasoning so the "
+            "output is grounded in your use case; doesn't drive selection (v1 "
+            "is cost-only). Omit it and the reasoning opens with 'Recommending'."
+        ),
     ),
     input_tokens: int | None = typer.Option(
         None,
@@ -248,11 +252,11 @@ def recommend(
 ) -> None:
     """Recommend the cheapest priced model for a workload + budget.
 
-    v1 ranks by cost only — `--task` is echoed into the reasoning so
-    the chosen model is grounded in the user's prompt, but it doesn't
-    drive selection (the tool isn't an LLM and can't interpret free
-    text). A future release will incorporate quality benchmarks via
-    the `quality_snapshot` table.
+    v1 ranks by cost only. `--task` is **optional** and only echoed
+    into the reasoning — it doesn't drive selection (the tool isn't
+    an LLM and can't interpret free text). A future release will
+    incorporate quality benchmarks via the `quality_snapshot` table,
+    at which point a populated `--task` becomes meaningful again.
 
     `--in` / `--out` default to a nominal 1,000 / 1,000 each; the
     reasoning flags the defaults so the caller knows the estimate is

@@ -150,7 +150,12 @@ class CompareProvidersResult(ResultBase):
 
 
 class RecommendProviderParams(ParamsBase):
-    task_description: str
+    # Optional in v1: it's echoed into the reasoning but doesn't drive
+    # selection (cost-only ranking). Requiring it forced callers to
+    # invent garbage values like "anything" or "a"; making it optional
+    # closes the UX trap. Will become meaningful again when a future
+    # `quality_priority` axis lands alongside populated `quality_snapshot`.
+    task_description: str | None = None
     expected_input_tokens: int | None = None
     expected_output_tokens: int | None = None
     budget_usd: float | None = None
