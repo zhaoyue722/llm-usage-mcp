@@ -14,6 +14,7 @@ import re
 from llm_usage.cli_render import (
     format_compare_result,
     format_providers,
+    format_recommend_result,
     format_spend_groups,
     format_status,
     format_usage_summary,
@@ -25,6 +26,7 @@ from llm_usage.core.models import (
     ProvidersReport,
     QuerySpendResult,
     RankedEntry,
+    RecommendProviderResult,
     SpendGroup,
     StatusDatabase,
     StatusPricing,
@@ -1255,3 +1257,115 @@ def test_providers_empty_report_renders_a_one_line_hint() -> None:
     out = format_providers(_providers_report(), color_enabled=False)
     assert "no known providers" in out
     assert "\n" not in out
+
+
+# --- format_recommend_result ---------------------------------------------
+
+
+def _recommend_result(
+    *,
+    provider: str = "qwen",
+    model: str = "qwen-flash",
+    cost: float = 0.0042,
+    reasoning: str = "For task 'anything': recommending qwen/qwen-flash.",
+) -> RecommendProviderResult:
+    return RecommendProviderResult(
+        provider=provider,
+        model=model,
+        estimated_cost_usd=cost,
+        reasoning=reasoning,
+    )
+
+
+def test_recommend_renders_two_section_layout() -> None:
+    """The renderer should produce a `Recommendation` block, a blank
+    line, and a `Reasoning` block — readers should see the chosen
+    model before they encounter the paragraph."""
+    out = format_recommend_result(_recommend_result(), color_enabled=False)
+    lines = out.split("\n")
+    assert "Recommendation" in lines[0]
+    # The blank line separates the two sections; find the Reasoning
+    # label and check there's at least one empty line above it.
+    reasoning_idx = next(i for i, line in enumerate(lines) if "Reasoning" in line)
+    assert "" in lines[:reasoning_idx]
+
+
+def test_recommend_renders_branded_provider_name() -> None:
+    """`deepseek` → `DeepSeek` in the chosen-model row (same convention
+    as compare's leader row)."""
+    out = format_recommend_result(
+        _recommend_result(provider="deepseek", model="cheap-1"),
+        color_enabled=False,
+    )
+    chosen_row = next(line for line in out.split("\n") if "cheap-1" in line)
+    assert "DeepSeek" in chosen_row
+    # The lowercase form shouldn't appear as a row label.
+    assert "deepseek / cheap-1" not in chosen_row
+
+
+def test_recommend_renders_4dp_cost() -> None:
+    """`$0.0042` — 4 decimal places, matching `compare` and `spend`."""
+    out = format_recommend_result(
+        _recommend_result(cost=0.0042),
+        color_enabled=False,
+    )
+    assert "$0.0042" in out
+
+
+def test_recommend_word_wraps_long_reasoning_paragraph() -> None:
+    """A reasoning paragraph longer than the wrap width should be
+    split across multiple lines — the user shouldn't have to scroll
+    horizontally to read it."""
+    long_reasoning = (
+        "For task 'a very long description here that should wrap': "
+        "recommending qwen/qwen-flash — the cheapest projected cost "
+        "among 159 priced model(s). Estimated $0.0042 for the workload. "
+        "v1 ranks by cost only; task_description is echoed for context "
+        "but does not drive selection."
+    )
+    out = format_recommend_result(
+        _recommend_result(reasoning=long_reasoning),
+        color_enabled=False,
+    )
+    reasoning_lines = [line for line in out.split("\n") if line.startswith("  ")]
+    # At least two lines under either section (chosen row + reasoning
+    # paragraph wrapped onto multiple lines). The wrapped paragraph
+    # specifically must span >1 line.
+    paragraph_lines = [line for line in reasoning_lines if "qwen" in line.lower() or "v1" in line]
+    assert len(paragraph_lines) >= 2
+
+
+def test_recommend_color_disabled_emits_no_ansi() -> None:
+    out = format_recommend_result(_recommend_result(), color_enabled=False)
+    assert _ANSI_RE.search(out) is None
+
+
+def test_recommend_color_enabled_marks_section_labels_cyan() -> None:
+    out = format_recommend_result(_recommend_result(), color_enabled=True)
+    for label in ("Recommendation", "Reasoning"):
+        label_line = next(line for line in out.split("\n") if label in line)
+        assert "36" in _extract_ansi_codes(label_line)  # cyan
+        assert "1" in _extract_ansi_codes(label_line)  # bold
+
+
+def test_recommend_color_enabled_marks_chosen_row_green_and_bold() -> None:
+    """The chosen-model row gets the leader-row stripe (bold green) so
+    the user's eye lands there first."""
+    out = format_recommend_result(
+        _recommend_result(provider="qwen", model="qwen-flash"),
+        color_enabled=True,
+    )
+    chosen_row = next(line for line in out.split("\n") if "qwen-flash" in line)
+    assert "32" in _extract_ansi_codes(chosen_row)  # green
+    assert "1" in _extract_ansi_codes(chosen_row)  # bold
+
+
+def test_recommend_color_enabled_dims_the_reasoning_paragraph() -> None:
+    """Reasoning is informational and dimmed so it doesn't compete
+    with the chosen-row green."""
+    out = format_recommend_result(_recommend_result(), color_enabled=True)
+    # Find a reasoning line (it starts with two spaces, contains text from
+    # the paragraph, and is NOT the chosen row).
+    reasoning_idx = next(i for i, line in enumerate(out.split("\n")) if "Reasoning" in line)
+    paragraph_line = out.split("\n")[reasoning_idx + 1]
+    assert "2" in _extract_ansi_codes(paragraph_line)  # dim

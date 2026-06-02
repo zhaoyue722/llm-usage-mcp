@@ -83,6 +83,7 @@ from llm_usage.core.models import (
     ProvidersReport,
     QuerySpendResult,
     RankedEntry,
+    RecommendProviderResult,
     SpendGroup,
     StatusProvider,
     StatusReport,
@@ -1056,9 +1057,96 @@ def _format_provider_model_lines(provider: ProviderRow, color_enabled: bool) -> 
     return ["    " + model for model in provider.models]
 
 
+# --- recommend renderer ---------------------------------------------------
+#
+# Two-block layout:
+#
+#     Recommendation
+#       Qwen / qwen-flash       $0.0042
+#
+#     Reasoning
+#       For task 'summarize a transcript': recommending qwen/qwen-flash —
+#       the cheapest projected cost among 159 priced model(s). Estimated
+#       $0.0042 for 1,000 input / 1,000 output tokens. v1 ranks by cost
+#       only; task_description is echoed for context but does not drive
+#       selection.
+#
+# Color treatment:
+#   - Section labels: bold cyan (same as `status` / `spend`).
+#   - The chosen row: bold green — the leader-row convention.
+#   - Reasoning paragraph: dim — informational, structured by template
+#     not requiring the user's full attention.
+#
+# Reasoning is word-wrapped at `_RECOMMEND_REASONING_WIDTH`. The MCP
+# tool returns it as one long string; the CLI wraps for readability.
+
+
+# Width the reasoning paragraph is wrapped at. 78 leaves a 2-col
+# margin under an 80-col terminal — wide enough to keep most sentences
+# on one line, narrow enough that the dim paragraph doesn't run edge-
+# to-edge with the rest of the output.
+_RECOMMEND_REASONING_WIDTH: Final[int] = 78
+
+
+def format_recommend_result(
+    result: RecommendProviderResult,
+    *,
+    color_enabled: bool,
+) -> str:
+    """Render `recommend`'s result for terminal display. Returns one string.
+
+    Layout: `Recommendation` block (chosen provider / model + cost) →
+    blank line → `Reasoning` block (word-wrapped paragraph). The
+    chosen row is green to match the leader-row convention from
+    `compare` and `spend`; the reasoning is dim because it's
+    informational and the user's eye should land on the chosen row
+    first.
+    """
+    provider = _provider_display(result.provider)
+    chosen_line = f"  {provider} / {result.model}  {_format_cost(result.estimated_cost_usd)}"
+    styled_chosen = (
+        click.style(chosen_line, fg="green", bold=True) if color_enabled else chosen_line
+    )
+
+    reasoning_lines = [
+        "  " + line for line in _wrap_paragraph(result.reasoning, _RECOMMEND_REASONING_WIDTH - 2)
+    ]
+    styled_reasoning = [_style(line, color_enabled, dim=True) for line in reasoning_lines]
+
+    blocks: list[str] = [
+        _section_label("Recommendation", color_enabled),
+        styled_chosen,
+        "",
+        _section_label("Reasoning", color_enabled),
+        *styled_reasoning,
+    ]
+    return "\n".join(blocks)
+
+
+def _wrap_paragraph(text: str, width: int) -> list[str]:
+    """Greedy word-wrap a paragraph at `width` columns.
+
+    Uses `textwrap.wrap` rather than rolling our own — handles the
+    long-token edge case (a URL or model name longer than `width`)
+    by leaving the long token alone on its own line rather than
+    breaking it mid-character. `replace_whitespace=False` would let
+    the reasoning's em-dash and apostrophes survive intact, but the
+    default behavior is fine for our single-line input.
+    """
+    import textwrap
+
+    return textwrap.wrap(
+        text,
+        width=width,
+        break_long_words=False,
+        break_on_hyphens=False,
+    ) or [""]
+
+
 __all__ = [
     "format_compare_result",
     "format_providers",
+    "format_recommend_result",
     "format_spend_groups",
     "format_status",
     "format_usage_summary",

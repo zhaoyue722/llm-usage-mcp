@@ -33,6 +33,7 @@ from llm_usage.capture.proxy import run_proxy
 from llm_usage.cli_render import (
     format_compare_result,
     format_providers,
+    format_recommend_result,
     format_spend_groups,
     format_status,
     format_usage_summary,
@@ -43,6 +44,7 @@ from llm_usage.core.db.session import get_session
 from llm_usage.core.diagnostics import collect_status
 from llm_usage.core.models import GroupBy, Period, SpendFilter
 from llm_usage.core.providers import collect_providers
+from llm_usage.core.recommend import recommend as _recommend_core
 from llm_usage.core.spend import aggregate_spend, period_window, summarize_usage
 
 app = typer.Typer(
@@ -165,6 +167,93 @@ def compare(
         # this flag follows the same decision. Without it, `--color always`
         # piped to a file (or captured by CliRunner) silently produces
         # plain text.
+        color=color_enabled,
+    )
+
+
+@app.command()
+def recommend(
+    task: str = typer.Option(
+        ...,
+        "--task",
+        "-t",
+        help="Free-form description of the work. Echoed into the reasoning; doesn't drive selection.",
+    ),
+    input_tokens: int | None = typer.Option(
+        None,
+        "--input",
+        "--in",
+        "-i",
+        help="Expected input tokens. Defaults to a nominal 1,000 (the reasoning flags the default).",
+    ),
+    output_tokens: int | None = typer.Option(
+        None,
+        "--output",
+        "--out",
+        "-o",
+        help="Expected output tokens. Defaults to a nominal 1,000.",
+    ),
+    budget_usd: float | None = typer.Option(
+        None,
+        "--budget",
+        "-b",
+        help="Max USD per call. When set, filters to affordable models; falls back to cheapest overall if nothing fits.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the same JSON the MCP `recommend_provider` tool returns. Pipe-friendly.",
+    ),
+    color: ColorMode = typer.Option(
+        ColorMode.auto,
+        "--color",
+        help="auto = color on TTY only (respects NO_COLOR); always = force on; never = force off.",
+    ),
+) -> None:
+    """Recommend the cheapest priced model for a workload + budget.
+
+    v1 ranks by cost only — `--task` is echoed into the reasoning so
+    the chosen model is grounded in the user's prompt, but it doesn't
+    drive selection (the tool isn't an LLM and can't interpret free
+    text). A future release will incorporate quality benchmarks via
+    the `quality_snapshot` table.
+
+    `--in` / `--out` default to a nominal 1,000 / 1,000 each; the
+    reasoning flags the defaults so the caller knows the estimate is
+    rough. `--budget` filters to affordable models — if nothing fits,
+    falls back to the cheapest overall and the reasoning says so.
+
+    `--json` returns the same Pydantic shape the MCP
+    `recommend_provider` tool produces, so existing schemas /
+    consumers work verbatim.
+    """
+    with get_session() as session:
+        try:
+            result = _recommend_core(
+                session,
+                task_description=task,
+                expected_input_tokens=input_tokens,
+                expected_output_tokens=output_tokens,
+                budget_usd=budget_usd,
+                # CLI-specific flag names so the reasoning's "specify
+                # ___ for a precise estimate" advice points at the
+                # flags the user just used, not the MCP tool's
+                # Python parameter names.
+                tokens_flag_names=("--in", "--out"),
+            )
+        except ValueError as exc:
+            # Empty pricing snapshot. Raise as a Typer abort with a
+            # clean exit code (1) rather than a stack trace — the
+            # message already tells the user what to do.
+            raise typer.BadParameter(str(exc), param_hint="--task") from exc
+
+    if json_output:
+        typer.echo(json.dumps(result.model_dump(), indent=2))
+        return
+
+    color_enabled = _resolve_color(color)
+    typer.echo(
+        format_recommend_result(result, color_enabled=color_enabled),
         color=color_enabled,
     )
 
@@ -446,4 +535,4 @@ def proxy_main() -> None:
     standalone()
 
 
-__all__ = ["app", "compare", "main", "providers", "proxy", "proxy_main"]
+__all__ = ["app", "compare", "main", "providers", "proxy", "proxy_main", "recommend"]
