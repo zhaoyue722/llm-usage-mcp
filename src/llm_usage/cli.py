@@ -53,8 +53,53 @@ app = typer.Typer(
     name="llm-usage",
     help="Local-first LLM spend capture + query, exposed over MCP.",
     no_args_is_help=True,
-    add_completion=False,
+    # `--install-completion {bash|zsh|fish|powershell}` and
+    # `--show-completion` ship for free once this is on. Users install
+    # the completion script into their shell once and then get
+    # tab-completion for every subcommand + flag.
+    add_completion=True,
 )
+
+
+def _version_callback(value: bool) -> None:
+    """Print the package version and exit cleanly.
+
+    Used as a Typer eager option so `llm-usage --version` short-
+    circuits before any subcommand parses its args. Falls back to
+    `"unknown"` when the package isn't installed (e.g., an editable
+    checkout without `uv sync`), mirroring `core.diagnostics`'s
+    `_package_version` rule so the two surfaces agree on what version
+    they report.
+    """
+    if not value:
+        return
+    from importlib import metadata
+
+    try:
+        version = metadata.version("llm-usage-mcp")
+    except metadata.PackageNotFoundError:
+        version = "unknown"
+    typer.echo(f"llm-usage {version}")
+    raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the version and exit.",
+    ),
+) -> None:
+    """Root callback wiring the `--version` / `-V` flag onto the app.
+
+    The body is a no-op — the flag's `callback=_version_callback` does
+    all the work via `typer.Exit()` when set. Without a root callback,
+    Typer has nowhere to hang the flag.
+    """
 
 
 class ColorMode(StrEnum):
