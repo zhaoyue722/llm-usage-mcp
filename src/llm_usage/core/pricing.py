@@ -20,11 +20,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Final
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from llm_usage.core.db.models import PricingSnapshot, PricingTier
+from llm_usage.core.models import PricingEntry
 
 # Trailing patterns that mark a pricing row as an alias/pinned-snapshot
 # variant of a "canonical" model. Stripping these from a model name
@@ -344,6 +345,57 @@ def all_pricing(session: Session) -> list[Pricing]:
 
     return [
         Pricing.from_orm(row, tiers_by_key.get((row.provider, row.model), [])) for row in snap_rows
+    ]
+
+
+def query_pricing(
+    session: Session,
+    *,
+    providers: list[str] | None = None,
+    models: list[str] | None = None,
+    match: str | None = None,
+) -> list[PricingEntry]:
+    """Return `pricing_snapshot` rows as `PricingEntry`s with optional filters.
+
+    Shared by the MCP `get_pricing` tool, the `usage://pricing_table`
+    resource, and the `llm-usage models` CLI. All three want the
+    Pydantic shape (`PricingEntry`) rather than the internal `Pricing`
+    dataclass — only the rate fields, no tiers, ready to serialize
+    over the MCP wire.
+
+    Filters:
+    - `providers`: case-insensitive whitelist on the provider column.
+      `None` = no filter; a list narrows to those entries.
+    - `models`: case-sensitive whitelist on the model column (catalog
+      literals — `gpt-5-mini` vs `GPT-5-mini` would be distinct rows
+      if the catalog ever had both, which it doesn't).
+    - `match`: case-insensitive substring on the model column. AND-
+      combines with `providers` / `models` when all three are passed.
+
+    Order is stable `(provider, model)` so callers (and tests) can
+    rely on it.
+    """
+    stmt = select(PricingSnapshot).order_by(PricingSnapshot.provider, PricingSnapshot.model)
+    if providers is not None:
+        lowered = [p.lower() for p in providers]
+        stmt = stmt.where(func.lower(PricingSnapshot.provider).in_(lowered))
+    if models is not None:
+        stmt = stmt.where(PricingSnapshot.model.in_(models))
+    if match is not None:
+        stmt = stmt.where(PricingSnapshot.model.ilike(f"%{match}%"))
+
+    rows = session.scalars(stmt).all()
+    return [
+        PricingEntry(
+            provider=row.provider,
+            model=row.model,
+            input_per_million_usd=row.input_per_million_usd,
+            output_per_million_usd=row.output_per_million_usd,
+            cache_write_per_million_usd=row.cache_write_per_million_usd,
+            cache_read_per_million_usd=row.cache_read_per_million_usd,
+            fetched_at=row.fetched_at,
+        )
+        for row in rows
     ]
 
 

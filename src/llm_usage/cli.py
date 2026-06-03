@@ -32,6 +32,7 @@ import typer
 from llm_usage.capture.proxy import run_proxy
 from llm_usage.cli_render import (
     format_compare_result,
+    format_pricing_catalog,
     format_providers,
     format_recommend_result,
     format_spend_groups,
@@ -42,7 +43,8 @@ from llm_usage.config import get_settings
 from llm_usage.core.compare import project_costs
 from llm_usage.core.db.session import get_session
 from llm_usage.core.diagnostics import collect_status
-from llm_usage.core.models import GroupBy, Period, SpendFilter
+from llm_usage.core.models import GetPricingResult, GroupBy, Period, SpendFilter
+from llm_usage.core.pricing import query_pricing
 from llm_usage.core.providers import collect_providers
 from llm_usage.core.recommend import recommend as _recommend_core
 from llm_usage.core.spend import aggregate_spend, period_window, summarize_usage
@@ -61,6 +63,14 @@ class ColorMode(StrEnum):
     auto = "auto"
     always = "always"
     never = "never"
+
+
+class SortAxis(StrEnum):
+    """`--sort` axis for `llm-usage models`."""
+
+    provider = "provider"
+    input = "input"
+    output = "output"
 
 
 @app.command()
@@ -187,6 +197,105 @@ def compare(
         # this flag follows the same decision. Without it, `--color always`
         # piped to a file (or captured by CliRunner) silently produces
         # plain text.
+        color=color_enabled,
+    )
+
+
+@app.command()
+def models(
+    providers: list[str] | None = typer.Option(
+        None,
+        "--provider",
+        help=(
+            "Filter to these providers. Repeatable, case-insensitive: "
+            "`--provider openai --provider DeepSeek`. Default: every provider."
+        ),
+    ),
+    match: str | None = typer.Option(
+        None,
+        "--match",
+        help=(
+            "Case-insensitive substring on the model name. Repeatable not "
+            "needed — one pattern at a time (e.g., `--match nano`)."
+        ),
+    ),
+    sort: SortAxis = typer.Option(
+        SortAxis.provider,
+        "--sort",
+        help="Sort axis. provider = alphabetical catalog feel; input/output = cheapest rate first.",
+    ),
+    show_all: bool = typer.Option(
+        False,
+        "--all",
+        help=(
+            "Show every catalog row, including alias/snapshot variants that "
+            "share an identical price (e.g., `gpt-5-mini` and "
+            "`gpt-5-mini-2025-08-07`). Default: collapse same-price same-family "
+            "variants into one row with ×N indicating the catalog count."
+        ),
+    ),
+    show_cache: bool = typer.Option(
+        False,
+        "--cache",
+        help=(
+            "Show cache_read/M + cache_write/M columns. Hidden by default since "
+            "most models don't carry cache rates and sparse columns waste width."
+        ),
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help=(
+            "Emit the same JSON the MCP `get_pricing` tool returns "
+            "(`GetPricingResult`). Always returns the raw catalog rows — "
+            "`--all` / `--cache` are presentation flags that don't affect JSON."
+        ),
+    ),
+    color: ColorMode = typer.Option(
+        ColorMode.auto,
+        "--color",
+        help="auto = color on TTY only (respects NO_COLOR); always = force on; never = force off.",
+    ),
+) -> None:
+    """Browse the local pricing catalog.
+
+    Answers "what does X charge per million tokens?" — the catalog
+    view, sibling of `compare`'s "what would X cost for my workload?"
+    view. Reads from `pricing_snapshot` only; doesn't project costs
+    against any specific token count.
+
+    Default view family-dedups catalog rows that share both a model-
+    family root AND identical pricing — so `gpt-5-mini` and
+    `gpt-5-mini-2025-08-07` (alias + pinned snapshot at the same
+    rates) collapse to one row with `×2`. Pass `--all` to see every
+    catalog row. When variants in the same family have *different*
+    prices, both rows appear regardless of `--all`.
+
+    `--json` mirrors the MCP `get_pricing` tool's `GetPricingResult`
+    shape verbatim, including alias/snapshot variants — JSON consumers
+    typically want the raw catalog rather than the deduped human view.
+    """
+    with get_session() as session:
+        entries = query_pricing(
+            session,
+            providers=providers if providers else None,
+            match=match,
+        )
+
+    if json_output:
+        # Mirror the MCP get_pricing tool's GetPricingResult exactly.
+        typer.echo(json.dumps(GetPricingResult(models=entries).model_dump(), indent=2))
+        return
+
+    color_enabled = _resolve_color(color)
+    typer.echo(
+        format_pricing_catalog(
+            entries,
+            sort=sort.value,
+            show_cache=show_cache,
+            show_all=show_all,
+            color_enabled=color_enabled,
+        ),
         color=color_enabled,
     )
 
@@ -588,4 +697,13 @@ def proxy_main() -> None:
     standalone()
 
 
-__all__ = ["app", "compare", "main", "providers", "proxy", "proxy_main", "recommend"]
+__all__ = [
+    "app",
+    "compare",
+    "main",
+    "models",
+    "providers",
+    "proxy",
+    "proxy_main",
+    "recommend",
+]

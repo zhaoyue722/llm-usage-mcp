@@ -13,6 +13,7 @@ import re
 
 from llm_usage.cli_render import (
     format_compare_result,
+    format_pricing_catalog,
     format_providers,
     format_recommend_result,
     format_spend_groups,
@@ -23,6 +24,7 @@ from llm_usage.core.models import (
     Alternative,
     CompareProvidersResult,
     LargestCall,
+    PricingEntry,
     ProviderRow,
     ProvidersReport,
     QuerySpendResult,
@@ -46,6 +48,38 @@ _WEEK_START_MS = 1779753600000  # 2026-05-26T00:00:00Z
 _WEEK_END_MS = 1780315200000  # 2026-06-01T12:00:00Z
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+# --- palette mirror for test assertions ---------------------------------
+#
+# The production palette in `cli_render.py` styles with truecolor RGB
+# tuples (`fg=(R, G, B)`), which click emits as `\x1b[38;2;R;G;Bm`.
+# Tests assert that a specific role-color is used by checking for the
+# corresponding `38;2;R;G;B` substring in the styled line — keeps the
+# assertion durable across rendering changes that only reorder
+# columns or escape attributes.
+#
+# Naming follows the role, not the hue; if the palette is re-skinned
+# in `cli_render.py`, mirror the same RGB tuples here. A single helper
+# `_has_fg(line, sgr)` keeps the call sites readable.
+
+_FG_MAUVE = "38;2;203;166;247"
+_FG_SKY = "38;2;137;220;235"
+_FG_MINT = "38;2;130;214;163"
+_FG_PEACH = "38;2;250;179;135"
+_FG_PINK = "38;2;245;194;231"
+_FG_SOFT_YELLOW = "38;2;249;226;175"
+_FG_ROSE = "38;2;243;139;168"
+_FG_LAVENDER = "38;2;180;190;254"
+
+
+def _has_fg(line: str, sgr: str) -> bool:
+    """True iff the styled `line` carries the given foreground SGR.
+
+    `sgr` is the body of a truecolor escape, e.g. `38;2;130;214;163`.
+    Checked as a literal substring of the line — the value is unique
+    enough across the palette that false positives aren't a concern.
+    """
+    return sgr in line
 
 
 def _ranked(*entries: tuple[str, str, float, float]) -> CompareProvidersResult:
@@ -219,7 +253,7 @@ def test_color_enabled_styles_winner_row_bold_green() -> None:
     # Click emits `\x1b[1m\x1b[32m` for bold + green (order may vary).
     assert "\x1b[" in winner_line  # ANSI present
     assert "1" in _extract_ansi_codes(winner_line)  # bold
-    assert "32" in _extract_ansi_codes(winner_line)  # green fg
+    assert _FG_MINT in winner_line  # green fg
 
 
 def test_color_enabled_heat_maps_pct_column_on_non_winner_rows() -> None:
@@ -232,18 +266,18 @@ def test_color_enabled_heat_maps_pct_column_on_non_winner_rows() -> None:
     )
     out = format_compare_result(result, input_tokens=1, output_tokens=1, color_enabled=True)
     by_model = {row.split()[1]: row for row in out.split("\n") if "▅" in row}
-    # Winner: whole-line green+bold (covers the pct too) — codes 1 and 32.
-    winner_codes = _extract_ansi_codes(by_model["cheap-1"])
-    assert "32" in winner_codes and "1" in winner_codes
-    # 150% → green heat on pct only (no bold).
-    low_codes = _extract_ansi_codes(by_model["low-mult"])
-    assert "32" in low_codes and "1" not in low_codes
-    # 400% → yellow heat.
-    mid_codes = _extract_ansi_codes(by_model["mid-mult"])
-    assert "33" in mid_codes  # yellow
-    # 800% → red heat.
-    high_codes = _extract_ansi_codes(by_model["high-mult"])
-    assert "31" in high_codes  # red
+    winner_line = by_model["cheap-1"]
+    low_line = by_model["low-mult"]
+    mid_line = by_model["mid-mult"]
+    high_line = by_model["high-mult"]
+    # Winner: whole-line mint+bold (covers the pct too).
+    assert _FG_MINT in winner_line and "1" in _extract_ansi_codes(winner_line)
+    # 150% → mint heat on pct only (no bold).
+    assert _FG_MINT in low_line and "1" not in _extract_ansi_codes(low_line)
+    # 400% → soft-yellow heat.
+    assert _FG_SOFT_YELLOW in mid_line
+    # 800% → rose heat.
+    assert _FG_ROSE in high_line
 
 
 def test_color_enabled_dims_header_divider_and_footnote() -> None:
@@ -598,9 +632,9 @@ def test_summary_color_enabled_marks_leader_row_bold_green_in_each_block() -> No
     )
     # Leader rows are bold + green; deliberately *not* heat-colored.
     assert "1" in _extract_ansi_codes(anthropic_line)
-    assert "32" in _extract_ansi_codes(anthropic_line)
+    assert _FG_MINT in anthropic_line
     assert "1" in _extract_ansi_codes(sonnet_line)
-    assert "32" in _extract_ansi_codes(sonnet_line)
+    assert _FG_MINT in sonnet_line
 
 
 def test_summary_color_enabled_marks_section_labels_cyan() -> None:
@@ -621,7 +655,7 @@ def test_summary_color_enabled_marks_section_labels_cyan() -> None:
     for label in ("top providers:", "top models:", "largest call:"):
         label_line = next(line for line in out.split("\n") if label in line)
         # cyan = 36.
-        assert "36" in _extract_ansi_codes(label_line)
+        assert _FG_MAUVE in label_line
 
 
 def test_summary_color_enabled_non_leader_rows_use_per_column_palette() -> None:
@@ -640,11 +674,10 @@ def test_summary_color_enabled_non_leader_rows_use_per_column_palette() -> None:
         color_enabled=True,
     )
     openai_line = next(line for line in out.split("\n") if "OpenAI" in line)
-    codes = _extract_ansi_codes(openai_line)
-    assert "37" in codes  # white (bar)
-    assert "33" in codes  # yellow (cost)
-    assert "35" in codes  # magenta (pct)
-    assert "32" not in codes  # never green on non-leader
+    assert _FG_SKY in openai_line  # sky (bar)
+    assert _FG_PEACH in openai_line  # peach (cost)
+    assert _FG_PINK in openai_line  # pink (pct)
+    assert _FG_MINT not in openai_line  # never mint on non-leader
 
 
 def test_summary_color_disabled_emits_no_ansi() -> None:
@@ -762,7 +795,7 @@ def test_groups_color_enabled_marks_top_row_bold_green() -> None:
     )
     leader = next(line for line in out.split("\n") if "Anthropic" in line)
     assert "1" in _extract_ansi_codes(leader)
-    assert "32" in _extract_ansi_codes(leader)
+    assert _FG_MINT in leader
 
 
 def test_groups_color_enabled_non_leader_rows_use_per_column_palette() -> None:
@@ -779,12 +812,11 @@ def test_groups_color_enabled_non_leader_rows_use_per_column_palette() -> None:
         color_enabled=True,
     )
     openai_line = next(line for line in out.split("\n") if "OpenAI" in line)
-    codes = _extract_ansi_codes(openai_line)
-    assert "37" in codes  # white (bar)
-    assert "33" in codes  # yellow (cost)
-    assert "36" in codes  # cyan (calls)
-    assert "35" in codes  # magenta (pct)
-    assert "32" not in codes  # never green on non-leader
+    assert _FG_SKY in openai_line  # sky (bar)
+    assert _FG_PEACH in openai_line  # peach (cost)
+    assert _FG_LAVENDER in openai_line  # lavender (calls)
+    assert _FG_PINK in openai_line  # pink (pct)
+    assert _FG_MINT not in openai_line  # never mint on non-leader
 
 
 def test_groups_bars_are_linear_proportional_to_total() -> None:
@@ -1052,7 +1084,7 @@ def test_status_pricing_stale_pricing_flags_attention_color() -> None:
     )
     # The "20 days ago" line lives on the refreshed row; yellow = SGR 33.
     refreshed_line = next(line for line in out.split("\n") if "20 days ago" in line)
-    assert "33" in _extract_ansi_codes(refreshed_line)
+    assert _FG_SOFT_YELLOW in refreshed_line
 
 
 def test_status_color_disabled_emits_no_ansi() -> None:
@@ -1082,15 +1114,15 @@ def test_status_color_enabled_marks_section_labels_cyan() -> None:
     )
     for label in ("Database", "Capture proxy", "Providers", "Pricing"):
         label_line = next(line for line in out.split("\n") if label in line)
-        assert "36" in _extract_ansi_codes(label_line)
+        assert _FG_MAUVE in label_line
 
 
 def test_status_color_enabled_marks_key_set_green_and_missing_yellow() -> None:
     out = format_status(_status(), color_enabled=True, now_ms=_WEEK_END_MS)
     set_line = next(line for line in out.split("\n") if "Anthropic" in line)
     missing_line = next(line for line in out.split("\n") if "OpenAI" in line)
-    assert "32" in _extract_ansi_codes(set_line)  # green
-    assert "33" in _extract_ansi_codes(missing_line)  # yellow
+    assert _FG_MINT in set_line  # green
+    assert _FG_SOFT_YELLOW in missing_line  # attention
 
 
 def _full_db() -> StatusDatabase:
@@ -1305,7 +1337,7 @@ def test_providers_color_enabled_marks_section_label_cyan() -> None:
         color_enabled=True,
     )
     header = out.split("\n")[0]
-    assert "36" in _extract_ansi_codes(header)  # cyan fg
+    assert _FG_MAUVE in header  # mauve fg
     assert "1" in _extract_ansi_codes(header)  # bold
 
 
@@ -1319,8 +1351,8 @@ def test_providers_color_enabled_marks_key_set_green_and_missing_yellow() -> Non
     )
     set_line = next(line for line in out.split("\n") if "Anthropic" in line)
     missing_line = next(line for line in out.split("\n") if "OpenAI" in line)
-    assert "32" in _extract_ansi_codes(set_line)  # green
-    assert "33" in _extract_ansi_codes(missing_line)  # yellow
+    assert _FG_MINT in set_line  # green
+    assert _FG_SOFT_YELLOW in missing_line  # attention
 
 
 def test_providers_rows_align_when_model_counts_have_different_widths() -> None:
@@ -1439,7 +1471,7 @@ def test_recommend_color_enabled_marks_section_labels_cyan() -> None:
     out = format_recommend_result(_recommend_result(), color_enabled=True)
     for label in ("Recommendation", "Reasoning"):
         label_line = next(line for line in out.split("\n") if label in line)
-        assert "36" in _extract_ansi_codes(label_line)  # cyan
+        assert _FG_MAUVE in label_line  # mauve
         assert "1" in _extract_ansi_codes(label_line)  # bold
 
 
@@ -1451,7 +1483,7 @@ def test_recommend_color_enabled_marks_chosen_row_green_and_bold() -> None:
         color_enabled=True,
     )
     chosen_row = next(line for line in out.split("\n") if "qwen-flash" in line)
-    assert "32" in _extract_ansi_codes(chosen_row)  # green
+    assert _FG_MINT in chosen_row  # green
     assert "1" in _extract_ansi_codes(chosen_row)  # bold
 
 
@@ -1547,6 +1579,344 @@ def test_recommend_color_enabled_keeps_chosen_row_green_and_alternatives_default
     )
     chosen_line = next(line for line in out.split("\n") if "qwen-flash" in line)
     alt_line = next(line for line in out.split("\n") if "deepseek-coder" in line)
-    assert "32" in _extract_ansi_codes(chosen_line)  # green
+    assert _FG_MINT in chosen_line  # green
     # Alternative row should not carry green foreground.
-    assert "32" not in _extract_ansi_codes(alt_line)
+    assert _FG_MINT not in alt_line
+
+
+# --- format_pricing_catalog ---------------------------------------------
+
+
+def _pricing(
+    provider: str,
+    model: str,
+    *,
+    input_rate: float,
+    output_rate: float,
+    cache_read: float | None = None,
+    cache_write: float | None = None,
+) -> PricingEntry:
+    return PricingEntry(
+        provider=provider,
+        model=model,
+        input_per_million_usd=input_rate,
+        output_per_million_usd=output_rate,
+        cache_read_per_million_usd=cache_read,
+        cache_write_per_million_usd=cache_write,
+        fetched_at=1,
+    )
+
+
+def test_catalog_empty_returns_one_line_hint() -> None:
+    """No entries → single hint line, no table scaffolding."""
+    out = format_pricing_catalog([], color_enabled=False)
+    assert "no priced models" in out
+    assert "\n" not in out
+
+
+def test_catalog_renders_section_header_and_column_row() -> None:
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "gpt-x", input_rate=1.0, output_rate=2.0),
+        ],
+        color_enabled=False,
+    )
+    lines = out.split("\n")
+    assert "Pricing catalog" in lines[0]
+    # Blank line between section header and column row.
+    assert lines[1] == ""
+    assert "Provider" in lines[2]
+    assert "Model" in lines[2]
+    assert "Input/M" in lines[2]
+    assert "Output/M" in lines[2]
+
+
+def test_catalog_renders_branded_provider_names() -> None:
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "gpt-x", input_rate=1.0, output_rate=2.0),
+            _pricing("deepseek", "ds-x", input_rate=1.0, output_rate=2.0),
+        ],
+        color_enabled=False,
+    )
+    # CamelCase brand names, not the lowercase DB form.
+    assert "OpenAI" in out
+    assert "DeepSeek" in out
+
+
+def test_catalog_renders_2dp_rates() -> None:
+    out = format_pricing_catalog(
+        [_pricing("openai", "gpt-x", input_rate=1.234, output_rate=10.0)],
+        color_enabled=False,
+    )
+    assert "$1.23" in out
+    assert "$10.00" in out
+
+
+def test_catalog_dedups_same_family_same_price_entries() -> None:
+    """alias + dated snapshot at identical price → 1 row with ×2."""
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "gpt-5-mini", input_rate=0.25, output_rate=1.0),
+            _pricing("openai", "gpt-5-mini-2025-08-07", input_rate=0.25, output_rate=1.0),
+        ],
+        color_enabled=False,
+    )
+    # Snapshot variant must NOT appear; the alias represents both.
+    assert "gpt-5-mini-2025-08-07" not in out
+    nano_line = next(line for line in out.split("\n") if "gpt-5-mini" in line)
+    assert "×2" in nano_line
+
+
+def test_catalog_keeps_same_family_different_price_entries() -> None:
+    """Price divergence within a family → both rows survive."""
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "gpt-5-mini", input_rate=0.25, output_rate=1.0),
+            _pricing("openai", "gpt-5-mini-2025-08-07", input_rate=0.20, output_rate=0.80),
+        ],
+        color_enabled=False,
+    )
+    assert "gpt-5-mini " in out  # alias row
+    assert "gpt-5-mini-2025-08-07" in out  # snapshot row
+    # Neither row carries a ×N marker (each is solo).
+    assert "×" not in out
+
+
+def test_catalog_show_all_disables_dedup() -> None:
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "gpt-5-mini", input_rate=0.25, output_rate=1.0),
+            _pricing("openai", "gpt-5-mini-2025-08-07", input_rate=0.25, output_rate=1.0),
+        ],
+        show_all=True,
+        color_enabled=False,
+    )
+    assert "gpt-5-mini-2025-08-07" in out
+    assert "×" not in out
+
+
+def test_catalog_cache_columns_hidden_by_default() -> None:
+    out = format_pricing_catalog(
+        [
+            _pricing(
+                "anthropic",
+                "claude-x",
+                input_rate=1.0,
+                output_rate=5.0,
+                cache_read=0.1,
+                cache_write=1.25,
+            )
+        ],
+        color_enabled=False,
+    )
+    assert "Cache R/M" not in out
+    assert "Cache W/M" not in out
+    assert "$0.10" not in out  # cache_read rate not rendered
+    # Footer points at the flag for discovery.
+    assert "--cache to show" in out
+
+
+def test_catalog_cache_columns_visible_with_show_cache() -> None:
+    out = format_pricing_catalog(
+        [
+            _pricing(
+                "anthropic",
+                "claude-x",
+                input_rate=1.0,
+                output_rate=5.0,
+                cache_read=0.1,
+                cache_write=1.25,
+            )
+        ],
+        show_cache=True,
+        color_enabled=False,
+    )
+    assert "Cache R/M" in out
+    assert "Cache W/M" in out
+    assert "$0.10" in out
+    assert "$1.25" in out
+
+
+def test_catalog_cache_columns_render_dash_for_missing_rates() -> None:
+    """A model with no cache rates should show `—` in the cache cells
+    rather than `$0.00` or a blank — `—` makes "absent" obvious."""
+    out = format_pricing_catalog(
+        [
+            _pricing(
+                "qwen",
+                "qwen-x",
+                input_rate=0.05,
+                output_rate=0.2,
+                cache_read=None,
+                cache_write=None,
+            )
+        ],
+        show_cache=True,
+        color_enabled=False,
+    )
+    qwen_line = next(line for line in out.split("\n") if "qwen-x" in line)
+    assert "—" in qwen_line
+
+
+def test_catalog_sort_provider_keeps_input_order() -> None:
+    """Default `sort=provider` preserves the alphabetical (provider,
+    model) order that `query_pricing` provides."""
+    entries = [
+        _pricing("anthropic", "a", input_rate=10.0, output_rate=20.0),
+        _pricing("openai", "b", input_rate=1.0, output_rate=2.0),
+        _pricing("qwen", "c", input_rate=5.0, output_rate=10.0),
+    ]
+    out = format_pricing_catalog(entries, color_enabled=False)
+    a_idx = out.index("Anthropic")
+    o_idx = out.index("OpenAI")
+    q_idx = out.index("Qwen")
+    assert a_idx < o_idx < q_idx
+
+
+def test_catalog_sort_input_orders_by_input_rate_ascending() -> None:
+    entries = [
+        _pricing("anthropic", "expensive", input_rate=10.0, output_rate=20.0),
+        _pricing("openai", "cheap", input_rate=1.0, output_rate=2.0),
+        _pricing("qwen", "mid", input_rate=5.0, output_rate=10.0),
+    ]
+    out = format_pricing_catalog(entries, sort="input", color_enabled=False)
+    assert "sorted by input rate" in out
+    cheap_idx = out.index("cheap")
+    mid_idx = out.index("mid")
+    expensive_idx = out.index("expensive")
+    assert cheap_idx < mid_idx < expensive_idx
+
+
+def test_catalog_sort_output_orders_by_output_rate_ascending() -> None:
+    entries = [
+        _pricing("anthropic", "high-out", input_rate=1.0, output_rate=100.0),
+        _pricing("openai", "low-out", input_rate=1.0, output_rate=2.0),
+    ]
+    out = format_pricing_catalog(entries, sort="output", color_enabled=False)
+    assert "sorted by output rate" in out
+    assert out.index("low-out") < out.index("high-out")
+
+
+def test_catalog_unknown_sort_raises() -> None:
+    """Defensive — unknown sort axis must surface as an error rather
+    than silently fall through to provider-order."""
+    import pytest
+
+    entries = [_pricing("openai", "x", input_rate=1.0, output_rate=2.0)]
+    with pytest.raises(ValueError, match="unknown sort axis"):
+        format_pricing_catalog(entries, sort="cost", color_enabled=False)
+
+
+def test_catalog_color_disabled_emits_no_ansi() -> None:
+    out = format_pricing_catalog(
+        [_pricing("openai", "gpt-x", input_rate=1.0, output_rate=2.0)],
+        color_enabled=False,
+    )
+    assert _ANSI_RE.search(out) is None
+
+
+def test_catalog_color_enabled_marks_section_label_cyan() -> None:
+    out = format_pricing_catalog(
+        [_pricing("openai", "gpt-x", input_rate=1.0, output_rate=2.0)],
+        color_enabled=True,
+    )
+    header = out.split("\n")[0]
+    assert _FG_MAUVE in header  # mauve
+    assert "1" in _extract_ansi_codes(header)  # bold
+
+
+def test_catalog_variant_marker_is_dim_when_color_enabled() -> None:
+    """`×N` cells get the dim attribute so they don't compete with
+    the rate columns — same convention as `compare`'s variant column."""
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "gpt-5-mini", input_rate=1.0, output_rate=2.0),
+            _pricing("openai", "gpt-5-mini-2025-08-07", input_rate=1.0, output_rate=2.0),
+        ],
+        color_enabled=True,
+    )
+    mini_line = next(line for line in out.split("\n") if "gpt-5-mini" in line)
+    assert "2" in _extract_ansi_codes(mini_line)  # dim somewhere on the line
+
+
+# --- styling: per-column color scheme + leader row ---------------------
+
+
+def test_catalog_color_enabled_paints_provider_cyan_and_rates_yellow() -> None:
+    """Per-column scheme: provider in cyan, Input/M + Output/M in
+    yellow. The model column stays default (it's the row label, not
+    data). Same convention as `spend`."""
+    out = format_pricing_catalog(
+        [_pricing("openai", "gpt-x", input_rate=1.0, output_rate=2.0)],
+        color_enabled=True,
+    )
+    data_line = next(line for line in out.split("\n") if "gpt-x" in line)
+    assert _FG_SKY in data_line  # sky (provider)
+    assert _FG_PEACH in data_line  # peach (rates)
+
+
+def test_catalog_leader_row_under_rate_sort_gets_bold_green() -> None:
+    """When `sort` is by rate (input/output), the first row is the
+    cheapest in that axis — it gets the bold-green leader stripe,
+    same as `compare`'s winner row."""
+    out = format_pricing_catalog(
+        [
+            _pricing("openai", "cheap", input_rate=0.05, output_rate=0.1),
+            _pricing("anthropic", "expensive", input_rate=10.0, output_rate=20.0),
+        ],
+        sort="input",
+        color_enabled=True,
+    )
+    cheap_line = next(line for line in out.split("\n") if "cheap" in line)
+    expensive_line = next(line for line in out.split("\n") if "expensive" in line)
+    cheap_codes = _extract_ansi_codes(cheap_line)
+    assert _FG_MINT in cheap_line  # mint (leader)
+    assert "1" in cheap_codes  # bold (leader)
+    # Expensive row stays in the per-column scheme — no mint.
+    assert _FG_MINT not in expensive_line
+
+
+def test_catalog_provider_sort_has_no_leader_row() -> None:
+    """Default `sort=provider` is a catalog browse — no inherent
+    winner, so no row gets the leader stripe. Pins the contract so a
+    future refactor can't accidentally always mark row 0 as leader."""
+    out = format_pricing_catalog(
+        [
+            _pricing("anthropic", "a", input_rate=10.0, output_rate=20.0),
+            _pricing("openai", "b", input_rate=0.05, output_rate=0.1),  # cheaper
+        ],
+        sort="provider",
+        color_enabled=True,
+    )
+    first_line = next(line for line in out.split("\n") if "anthropic" in line.lower())
+    # The Anthropic row is alphabetically first but expensive — must
+    # NOT carry the leader stripe.
+    assert _FG_MINT not in first_line
+
+
+def test_catalog_cache_cells_are_dim_yellow_when_shown() -> None:
+    """Cache columns are money (yellow) but secondary signal (dim).
+    Same scheme as the input/output columns minus the dim attribute."""
+    out = format_pricing_catalog(
+        [
+            _pricing(
+                "anthropic",
+                "claude-x",
+                input_rate=1.0,
+                output_rate=5.0,
+                cache_read=0.1,
+                cache_write=1.25,
+            )
+        ],
+        show_cache=True,
+        color_enabled=True,
+    )
+    data_line = next(line for line in out.split("\n") if "claude-x" in line)
+    codes = _extract_ansi_codes(data_line)
+    # Yellow (rate columns + cache columns).
+    assert _FG_PEACH in data_line  # cache cells inherit peach
+    # Dim somewhere (cache columns wear it; the input/output columns
+    # don't, but the variant column would if present — without one
+    # here the dim must come from cache cells).
+    assert "2" in codes
