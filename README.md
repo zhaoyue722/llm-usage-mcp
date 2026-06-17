@@ -1,5 +1,7 @@
 # llm-usage-mcp
 
+> English | [中文](README.zh.md)
+
 a local-first, multi-provider tool that captures LLM API spend and exposes it to coding agents via the Model Context Protocol
 
 [![CI](https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml)
