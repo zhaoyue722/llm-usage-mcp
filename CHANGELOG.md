@@ -6,7 +6,7 @@ All notable changes to `llm-usage-mcp` are recorded here. The format follows [Ke
 
 Nothing yet.
 
-## [0.1.0] — 2026-05-31
+## [0.1.0] — 2026-06-17
 
 The initial public release: local-first MCP server that captures LLM API spend across Anthropic, OpenAI, DeepSeek, and Qwen, and exposes spend / pricing / recommendation queries as MCP tools.
 
