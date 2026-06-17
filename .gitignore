@@ -12,6 +12,10 @@ docs/status.md
 # Local-only one-off review / re-evaluation notes (kept on disk, never pushed)
 docs/re_evaluation_*.md
 
+# Local-only manual-exercise scripts (real-API dogfooding; uncommitted on purpose)
+scripts/dogfood.sh
+scripts/exercise_qwen.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
