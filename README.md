@@ -226,19 +226,7 @@ Seven tools, exposed over stdio. Full param/return shapes in [`docs/spec.md`](do
 
 `query_spend` and `usage_summary` default to `include_failed=false` so partial-stream rows don't pollute totals; opt-in via the param.
 
-## Architecture
-
-```
-Layer 3:  src/llm_usage/mcp/       — MCP tools + resources (read)
-Layer 2:  src/llm_usage/core/      — SQLite + pricing + cost math
-Layer 1:  src/llm_usage/capture/   — proxy: Anthropic, OpenAI, DeepSeek, Qwen
-```
-
-One SQLite (`~/.llm-usage/usage.db`) sits in the middle. The proxy and the MCP server are independent processes that happen to share the file. Costs are snapshotted into `usage_events` at write time, so a future pricing change never rewrites history.
-
-Streaming capture works by teeing upstream SSE bytes to the client unchanged while a side-channel parser accumulates the `usage` block — Anthropic and OpenAI families have different wire formats and slightly different recording semantics, both documented in [`docs/architecture.md`](docs/architecture.md).
-
-## Supported providers (v1)
+## Supported providers
 
 | Provider | Auth | Non-streaming | Streaming | Cache pricing |
 |---|---|---|---|---|
@@ -247,7 +235,9 @@ Streaming capture works by teeing upstream SSE bytes to the client unchanged whi
 | DeepSeek | `Bearer` | yes | yes | `prompt_cache_hit_tokens` / `_miss_tokens` |
 | Qwen (DashScope) | `Bearer` | yes | yes | usually omitted on the OpenAI-compat endpoint |
 
-Pricing data is a vendored, trimmed snapshot of [LiteLLM's pricing JSON](https://github.com/BerriAI/litellm/blob/main/litellm/model_prices_and_context_window_backup.json), refreshed weekly by a GitHub Action ([`refresh-pricing.yml`](.github/workflows/refresh-pricing.yml)).
+**More on the way.** Google Gemini, AWS Bedrock, Moonshot (Kimi), Zhipu GLM, MiniMax, and others are scoped in [`docs/post_v1_providers.md`](docs/post_v1_providers.md).
+
+**Where prices come from.** Pricing is a vendored, trimmed snapshot of [LiteLLM's pricing JSON](https://github.com/BerriAI/litellm/blob/main/litellm/model_prices_and_context_window_backup.json), refreshed weekly by a GitHub Action ([`refresh-pricing.yml`](.github/workflows/refresh-pricing.yml)). Models LiteLLM doesn't carry yet are filled in locally via [`pricing_overrides.json`](src/llm_usage/core/pricing_data/pricing_overrides.json).
 
 ## Configuration
 
@@ -258,18 +248,6 @@ All config lives in env vars (or a `.env` file at the repo root). Defaults are s
 | `LLM_USAGE_DB_URL` | `sqlite:///$HOME/.llm-usage/usage.db` | Where the local DB lives. |
 | `LLM_USAGE_PROXY_PORT` | `5525` | Capture proxy port (loopback only). |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` | unset | Provider keys; only what you use is required. |
-
-## Development
-
-```bash
-uv sync                                  # install project + dev deps
-uv run pytest                            # 700+ tests, ~6s
-uv run ruff check src/ tests/            # lint
-uv run ruff format --check src/ tests/   # formatting
-uv run mypy                              # --strict
-```
-
-CI runs all four on every PR and every push to `main` ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) with an 80% coverage floor.
 
 ## License
 

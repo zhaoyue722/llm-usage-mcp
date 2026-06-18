@@ -263,19 +263,7 @@ $ llm-usage providers --models   # 展开每个厂商的模型清单
 
 `query_spend` 和 `usage_summary` 默认 `include_failed=false`，流式中断写下的部分计数行不会污染总额；想算进去就显式传 `true`。
 
-## 架构
-
-```
-Layer 3:  src/llm_usage/mcp/       —— MCP 工具 + 资源(读路径)
-Layer 2:  src/llm_usage/core/      —— SQLite + 定价 + 成本计算
-Layer 1:  src/llm_usage/capture/   —— 抓取代理:Anthropic / OpenAI / DeepSeek / Qwen
-```
-
-中间是一个 SQLite(`~/.llm-usage/usage.db`)。Proxy 和 MCP 服务器是**两个独立进程**，之间没有 IPC，只是恰好指向同一个文件。成本在**写入那一刻**就按当时的定价快照算好，所以以后调价不会回头改写历史——这是事件溯源的标准做法，也是为什么我们敢把数字直接拿给你看。
-
-流式抓取的做法是：**SSE 字节原样透传给客户端，旁路开一个 parser 把 `usage` 块攒出来**。Anthropic 走 `message_start` + `message_delta` 两段 usage，OpenAI 家族走最后一个带 `usage` 的 chunk(需要 `stream_options.include_usage=true`)。两条路径的细节都在 [`docs/architecture.md`](docs/architecture.md) 里。
-
-## 支持的厂商(v1)
+## 支持的厂商
 
 | 厂商 | 认证 | 非流式 | 流式 | 缓存计价 |
 |---|---|---|---|---|
@@ -284,9 +272,9 @@ Layer 1:  src/llm_usage/capture/   —— 抓取代理:Anthropic / OpenAI / Deep
 | DeepSeek | `Bearer` | 是 | 是 | `prompt_cache_hit_tokens` / `_miss_tokens` |
 | Qwen (DashScope) | `Bearer` | 是 | 是 | OpenAI 兼容端点上通常不返回 |
 
-定价数据是 [LiteLLM 定价 JSON](https://github.com/BerriAI/litellm/blob/main/litellm/model_prices_and_context_window_backup.json) 的精简快照，由一个 GitHub Action 每周自动刷新([`refresh-pricing.yml`](.github/workflows/refresh-pricing.yml))。
+**更多厂商在路上。** Google Gemini、AWS Bedrock、Moonshot(Kimi)、Zhipu GLM、MiniMax、文心一言等都已列入计划，工作量和坑见 [`docs/post_v1_providers.md`](docs/post_v1_providers.md)（英文）。
 
-LiteLLM 还没收录的型号(比如 2026-05 之后才上的 `deepseek-v4-flash`)，我们用 [`pricing_overrides.json`](src/llm_usage/core/pricing_data/pricing_overrides.json) 在本地兜底，每次重启 proxy / MCP 服务器都会重新合并——改完那个文件重启就生效。
+**价格从哪来。** 定价是 [LiteLLM 定价 JSON](https://github.com/BerriAI/litellm/blob/main/litellm/model_prices_and_context_window_backup.json) 的精简快照，由一个 GitHub Action 每周自动刷新（[`refresh-pricing.yml`](.github/workflows/refresh-pricing.yml)）。LiteLLM 还没收录的型号(比如 2026-05 之后才上的 `deepseek-v4-flash`)，用 [`pricing_overrides.json`](src/llm_usage/core/pricing_data/pricing_overrides.json) 在本地兜底。
 
 ## 配置
 
@@ -299,27 +287,6 @@ LiteLLM 还没收录的型号(比如 2026-05 之后才上的 `deepseek-v4-flash`
 | `LLM_USAGE_ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | 用第三方反代时改这里。 |
 | `LLM_USAGE_OPENAI_BASE_URL` | `https://api.openai.com/v1` | 同上。 |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` | 未设置 | 各厂商 key，按需配。 |
-
-## 开发
-
-```bash
-uv sync                                  # 装项目 + 开发依赖
-uv run pytest                            # 700+ 个测试，约 6s
-uv run ruff check src/ tests/            # lint
-uv run ruff format --check src/ tests/   # 格式检查
-uv run mypy                              # --strict
-```
-
-CI([`.github/workflows/ci.yml`](.github/workflows/ci.yml))在每个 PR 和每次推到 `main` 时都跑这四步，卡 80% 覆盖率底线。
-
-## 想加新厂商？
-
-参见 [`docs/post_v1_providers.md`](docs/post_v1_providers.md)(英文)，里面列了 Google Gemini、AWS Bedrock、Moonshot、Zhipu GLM、MiniMax、文心一言等等的接入工作量和坑。每加一家，有两笔账要分开算：
-
-1. **定价数据**：在 `prices.json` / `pricing_overrides.json` 里加几行，小时级别。
-2. **抓取适配器**：解析它特有的 usage 形状(尤其是流式)，天到周级别。
-
-而且这两笔账**可以分开还**——先把定价加进来、用 `record_usage` 手工记着，等用量大了再写适配器，是个完全合理的中间状态。
 
 ## 许可证
 
