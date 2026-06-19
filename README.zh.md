@@ -26,7 +26,7 @@
 
 ## 两分钟跑起来
 
-从 `git clone` 到「让 Claude Code 告诉我刚才花了多少」，大概两分钟。
+从 `git clone` 到记下第一笔调用，大概两分钟。这一节讲的是怎么把调用**记下来**；记下来之后[怎么查账](#查看你的花费)，下一节再说。
 
 ### 1. 安装
 
@@ -38,9 +38,9 @@ uv sync
 
 `uv sync` 会把项目和开发依赖一起装好，顺手在 venv 里建三个命令：
 
-- `llm-usage`：主命令行工具，七个子命令，后面 [命令行工具](#命令行工具) 一节细讲。
-- `llm-usage-mcp`：stdio 模式的 MCP 服务器（Layer 3）。
-- `llm-usage-proxy`：抓取代理（Layer 1）。其实就是 `llm-usage proxy` 的别名，为了向后兼容留着。
+- `llm-usage`：主命令行工具，七个子命令，详见后面的 [查看你的花费](#查看你的花费) 一节。
+- `llm-usage-mcp`：stdio 模式的 MCP 服务器。
+- `llm-usage-proxy`：抓取代理。其实就是 `llm-usage proxy` 的别名，为了向后兼容留着。
 
 > 还没装 [uv](https://docs.astral.sh/uv/) 的话，`pip install uv` 装一次就有，国内建议配个镜像源。Python 版本需要 3.13 以上。
 
@@ -102,9 +102,21 @@ resp = client.chat.completions.create(
 )
 ```
 
-每次调用都会连着 token 数、花了多少钱（精确到纳美元）、耗时、还有一个用来去重的 `request_id`，一起写进 `~/.llm-usage/usage.db`。
+### 5. 确认它在记账
 
-### 5. 通过 MCP 查用量
+通过 Agent（或者任何指向代理的客户端）随便发一次调用，然后看看有没有记上：
+
+```bash
+uv run llm-usage spend
+```
+
+每次调用都会连着 token 数、花了多少钱（精确到纳美元）、耗时、还有一个去重用的 `request_id`，一起写进 `~/.llm-usage/usage.db`，也会出现在这张周报里。一条闭环就齐了：一头记账，一头看账。
+
+## 查看你的花费
+
+调用开始被记下来之后，有两种方式把账读回来。数据是同一份、数字也一样，看你当下顺手用哪个。
+
+### 让编码 Agent 帮你查（MCP）
 
 把 MCP 服务器挂到 Claude Code 上：
 
@@ -116,11 +128,23 @@ claude mcp add llm-usage -- uv --directory $(pwd) run llm-usage-mcp
 
 > 今天我在 Anthropic 上花了多少？跑一次 10k 输入 / 2k 输出，哪家最便宜？
 
-剩下的交给 Claude：它会在背后调 `usage_summary`、`query_spend`、`compare_providers` 这些工具，你只管看答案。
+剩下的交给 Claude：它会自己挑合适的工具、把数字读回来。一共七个工具，通过 stdio 暴露；完整的参数和返回值见 [`docs/spec.md`](docs/spec.md)。
 
-## 命令行工具
+| 工具 | 作用 |
+|---|---|
+| `query_spend` | 给定时间窗口统计总花费，可按 provider / model / project / tag / day 分组。 |
+| `usage_summary` | 「今天 / 本周 / 本月 / 今年」的一句话总结：总额、花得最多的 3 家厂商和 3 个模型、最贵的一次。 |
+| `compare_providers` | 给定一个假想工作量（输入 / 输出 token 数），把所有有价模型按成本排序。 |
+| `recommend_provider` | 在预算之内挑最便宜的模型。 |
+| `get_pricing` | 直接查当前的定价快照。 |
+| `list_providers` | 列出所有厂商、各自的模型、以及是否 OpenAI 兼容。 |
+| `record_usage` | 手动记一条调用——proxy 不在链路上时用（比如离线分析、批量补录）。 |
 
-这就是那七个 MCP 工具的命令行版本，全塞在一个 `llm-usage` 命令底下。有时候自己敲一行，比开口问 Agent 还快。
+`query_spend` 和 `usage_summary` 默认 `include_failed=false`，流式中断时写下的半截记录不会混进总额；想把它们也算进来，显式传 `true` 即可。
+
+### 用命令行查（CLI）
+
+同样这些问题，换成命令行——七个子命令，全塞在一个 `llm-usage` 命令底下。有时候自己敲一行，比开口问 Agent 还快。
 
 ```text
 $ llm-usage
@@ -240,22 +264,6 @@ $ llm-usage providers
 $ llm-usage providers --models   # 把每家厂商连同它的模型清单一起展开
 ```
 
-## MCP 工具一览
-
-七个工具，通过 stdio 暴露。完整的参数和返回值见 [`docs/spec.md`](docs/spec.md)。
-
-| 工具 | 作用 |
-|---|---|
-| `query_spend` | 给定时间窗口统计总花费，可按 provider / model / project / tag / day 分组。 |
-| `usage_summary` | 「今天 / 本周 / 本月 / 今年」的一句话总结：总额、花得最多的 3 家厂商和 3 个模型、最贵的一次。 |
-| `compare_providers` | 给定一个假想工作量（输入 / 输出 token 数），把所有有价模型按成本排序。 |
-| `recommend_provider` | 在预算之内挑最便宜的模型。 |
-| `get_pricing` | 直接查当前的定价快照。 |
-| `list_providers` | 列出所有厂商、各自的模型、以及是否 OpenAI 兼容。 |
-| `record_usage` | 手动记一条调用——proxy 不在链路上时用（比如离线分析、批量补录）。 |
-
-`query_spend` 和 `usage_summary` 默认 `include_failed=false`，流式中断时写下的半截记录不会混进总额；想把它们也算进来，显式传 `true` 即可。
-
 ## 支持的厂商
 
 | 厂商 | 认证 | 非流式 | 流式 | 缓存计价 |
@@ -271,15 +279,13 @@ $ llm-usage providers --models   # 把每家厂商连同它的模型清单一起
 
 ## 配置
 
-配置全走环境变量（或者仓库根目录下的 `.env`）。默认值就够用，启动 proxy 不强制要求任何一项。完整清单见 [`docs/configuration.md`](docs/configuration.md)。最常调的几个：
+配置全走环境变量（或者仓库根目录下的 `.env`）。默认值就够用，启动 proxy 不强制要求任何一项。完整清单见 [`docs/configuration.md`](docs/configuration.md)。最可能动的三个：
 
 | 变量 | 默认值 | 作用 |
 |---|---|---|
 | `LLM_USAGE_DB_URL` | `sqlite:///$HOME/.llm-usage/usage.db` | 本地数据库存哪。 |
 | `LLM_USAGE_PROXY_PORT` | `5525` | 代理端口（永远只绑回环）。 |
-| `LLM_USAGE_ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | 接第三方反代时改这里。 |
-| `LLM_USAGE_OPENAI_BASE_URL` | `https://api.openai.com/v1` | 同上。 |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` | 未设置 | 各家的 key，用到哪个配哪个。 |
+| `LLM_USAGE_<PROVIDER>_BASE_URL` | 各家官方端点 | 把某家指到反代 / 网关，国内网络受限时很有用。 |
 
 ## 许可证
 

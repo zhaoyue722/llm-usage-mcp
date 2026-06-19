@@ -24,7 +24,7 @@ And it stays out of your way:
 
 ## Quickstart
 
-Two minutes from `git clone` to "Claude Code can answer how much I just spent."
+Two minutes from `git clone` to your first captured call. This part is about **capture** — getting calls recorded. [Reading the data back](#querying-your-spend) comes next.
 
 ### 1. Install
 
@@ -35,8 +35,8 @@ uv sync
 ```
 
 `uv sync` installs the project + dev deps and creates three console scripts in the venv:
-- `llm-usage` — the multi-command CLI. See [CLI](#cli) below.
-- `llm-usage-mcp` — the stdio MCP server (Layer 3).
+- `llm-usage` — the multi-command CLI. See [From the command line (CLI)](#from-the-command-line-cli) below.
+- `llm-usage-mcp` — the stdio MCP server.
 - `llm-usage-proxy` — a back-compat alias; identical to `llm-usage proxy`.
 
 ### 2. Set at least one API key
@@ -78,9 +78,21 @@ Example — launch Claude Code with calls routed through the proxy:
 ANTHROPIC_BASE_URL=http://127.0.0.1:5525 claude
 ```
 
-Every call lands in `~/.llm-usage/usage.db` with tokens, cost, latency, and a `request_id` for idempotency.
+### 5. Confirm it's capturing
 
-### 5. Query your spend via MCP
+Make a call through your agent (or any client pointed at the proxy), then check it landed:
+
+```bash
+uv run llm-usage spend
+```
+
+Every call lands in `~/.llm-usage/usage.db` with tokens, cost, latency, and a `request_id` for idempotency — and shows up in that headline. That's the whole loop: capture on one side, answers on the other.
+
+## Querying your spend
+
+Once calls are being captured, you read them back two ways. Same data, same numbers — pick whichever fits the moment.
+
+### Ask your coding agent (MCP)
 
 Register the MCP server with Claude Code:
 
@@ -88,15 +100,27 @@ Register the MCP server with Claude Code:
 claude mcp add llm-usage -- uv --directory $(pwd) run llm-usage-mcp
 ```
 
-Then ask Claude inside that session:
+Then just ask, in plain English, inside that session:
 
 > How much did I spend on Anthropic today? Which provider is cheapest for a 10k-input / 2k-output call?
 
-Claude calls `usage_summary`, `query_spend`, `compare_providers`, and friends under the hood.
+Claude picks the right tool and reads the numbers back. Seven tools are exposed over stdio; full param/return shapes are in [`docs/spec.md`](docs/spec.md).
 
-## CLI
+| Tool | Purpose |
+|---|---|
+| `query_spend` | Totals + per-group rollups over a time window (group by provider / model / project / tag / day). |
+| `usage_summary` | Headline summary for `today` / `week` / `month` / `year` — totals, top-N providers + models, largest call. |
+| `compare_providers` | Given a hypothetical workload (tokens in / out), rank every priced model by cost. |
+| `recommend_provider` | Pick the cheapest priced model that fits a stated budget. |
+| `get_pricing` | Inspect the vendored pricing snapshot. |
+| `list_providers` | List providers + their models + OpenAI-compatibility flag. |
+| `record_usage` | Manual write path — log a call when the capture proxy isn't in the picture. |
 
-The CLI mirror of the MCP tools — seven subcommands under one `llm-usage` console, for when typing is faster than asking your agent.
+`query_spend` and `usage_summary` default to `include_failed=false` so partial-stream rows don't pollute totals; opt-in via the param.
+
+### From the command line (CLI)
+
+The same questions, as a CLI — seven subcommands under one `llm-usage` console, for when typing is faster than asking your agent.
 
 ```text
 $ llm-usage
@@ -216,22 +240,6 @@ $ llm-usage providers
 $ llm-usage providers --models   # expand each provider with its model list
 ```
 
-## MCP tools
-
-Seven tools, exposed over stdio. Full param/return shapes in [`docs/spec.md`](docs/spec.md).
-
-| Tool | Purpose |
-|---|---|
-| `query_spend` | Totals + per-group rollups over a time window (group by provider / model / project / tag / day). |
-| `usage_summary` | Headline summary for `today` / `week` / `month` / `year` — totals, top-N providers + models, largest call. |
-| `compare_providers` | Given a hypothetical workload (tokens in / out), rank every priced model by cost. |
-| `recommend_provider` | Pick the cheapest priced model that fits a stated budget. |
-| `get_pricing` | Inspect the vendored pricing snapshot. |
-| `list_providers` | List providers + their models + OpenAI-compatibility flag. |
-| `record_usage` | Manual write path — log a call when the capture proxy isn't in the picture. |
-
-`query_spend` and `usage_summary` default to `include_failed=false` so partial-stream rows don't pollute totals; opt-in via the param.
-
 ## Supported providers
 
 | Provider | Auth | Non-streaming | Streaming | Cache pricing |
@@ -247,13 +255,13 @@ Seven tools, exposed over stdio. Full param/return shapes in [`docs/spec.md`](do
 
 ## Configuration
 
-All config lives in env vars (or a `.env` file at the repo root). Defaults are sane; nothing is required to start the proxy. See [`docs/configuration.md`](docs/configuration.md) for the full reference. The most common knobs:
+Everything is env vars (or a `.env` file at the repo root). Defaults are sane — nothing is required to start the proxy. Full reference: [`docs/configuration.md`](docs/configuration.md). The three you're most likely to touch:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `LLM_USAGE_DB_URL` | `sqlite:///$HOME/.llm-usage/usage.db` | Where the local DB lives. |
 | `LLM_USAGE_PROXY_PORT` | `5525` | Capture proxy port (loopback only). |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` | unset | Provider keys; only what you use is required. |
+| `LLM_USAGE_<PROVIDER>_BASE_URL` | each provider's official endpoint | Point a provider at a reverse proxy / gateway — handy in network-restricted regions. |
 
 ## License
 
