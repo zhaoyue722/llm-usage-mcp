@@ -2,19 +2,25 @@
 
 > English | [中文](README.zh.md)
 
-a local-first, multi-provider tool that captures LLM API spend and exposes it to coding agents via the Model Context Protocol
+Know what your LLM calls actually cost — across every provider, in one place, on your own machine. Ask your coding agent (MCP) or type a command (CLI).
 
 [![CI](https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 
-## Why
+## Why you'd want this
 
-A coding agent today calls LLMs from several providers — Anthropic, OpenAI, plus Chinese providers like Qwen and DeepSeek. Costs end up scattered across dashboards, billed in different currencies, with different cache-pricing models. `llm-usage-mcp` gives you **one local SQLite of every LLM call you make**, exposed as MCP tools so any coding agent can answer "how much did I spend on Claude this week?", "which provider is cheapest for this task?", or "recommend a provider given my budget."
+You're calling LLMs from a handful of providers — Claude, GPT, plus Chinese models like Qwen and DeepSeek. Each one bills in its own dashboard, in its own currency, with its own rules for what a "cached token" costs. So the simplest possible question — *how much am I spending, and on what?* — turns into four logins, a manual currency conversion, and reconciling four different cache-pricing models. Most people just... don't, and the bill is a surprise at the end of the month.
 
-- **Local-first.** No SaaS, no signup, no telemetry. SQLite file in `~/.llm-usage/usage.db`. Privacy is a feature.
-- **Multi-provider.** Anthropic, OpenAI, DeepSeek, Qwen — non-streaming and SSE streaming for every one.
-- **MCP-native.** Reads + writes through the Model Context Protocol so Claude Code, Cursor, and any other MCP client get the same surface.
+`llm-usage-mcp` captures every call you make into one local store, costs it correctly per provider at the moment it happens, and hands the answer back **two ways**:
+
+- **Ask your coding agent.** It's an MCP server, so Claude Code, Cursor, or any MCP client can answer *"how much did I spend on Claude this week?"* or *"which provider is cheapest for a 10k-in / 2k-out call?"* in plain English.
+- **Or type a command.** It's also a CLI — `llm-usage spend`, `llm-usage compare`, `llm-usage recommend` — for when you'd rather not round-trip through an agent.
+
+And it stays out of your way:
+
+- **Local-first.** No SaaS, no signup, no telemetry. Just a SQLite file at `~/.llm-usage/usage.db`. Privacy is a feature, not a setting.
+- **Multi-provider, Chinese models included.** Anthropic, OpenAI, DeepSeek, Qwen — streaming and non-streaming for all four, with DeepSeek and Qwen as first-class citizens rather than afterthoughts.
 
 ## Quickstart
 
