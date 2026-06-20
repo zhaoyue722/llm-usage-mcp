@@ -19,10 +19,10 @@
 - **张嘴问 Agent。** 它本身是个 MCP 服务器，Claude Code、Cursor 这些 MCP 客户端都听得懂大白话：「这周在 Claude 上花了多少钱？」「跑一次 10k 输入 / 2k 输出，哪家最便宜？」
 - **或者直接敲命令。** 它也是个极简的命令行工具，`llm-usage spend`、`llm-usage compare`、`llm-usage recommend` 几条命令直奔主题，适合你只想搞钱、不想和 AI 废话文学扯皮的清爽时刻。
 
-**用着也省心：**：
+**用着也省心：**
 
 - **绝对的本地优先。** 不连 SaaS、不用注册账号、更不搞任何“偷摸把你的调用历史上传分析”的幺蛾子。所有数据老老实实躺在 `~/.llm-usage/usage.db` 这一个 SQLite 文件里。隐私是出厂默认的，不是某个藏在菜单深处等你专门去打开的开关。
-- **多种模型（包括国产模型）** Anthropic、OpenAI、DeepSeek、Qwen 四家流式、非流式全部完美支持。
+- **多种模型（包括国产模型）** Anthropic、OpenAI、DeepSeek、Qwen 四家流式、非流式全部完美支持，更多厂商（Gemini、Bedrock、Moonshot…）也[在路上](#支持的厂商)。
 
 ## 两分钟跑起来
 

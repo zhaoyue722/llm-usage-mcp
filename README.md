@@ -20,7 +20,7 @@ You're calling LLMs from a handful of providers — Claude, GPT, plus Chinese mo
 And it stays out of your way:
 
 - **Local-first.** No SaaS, no signup, no telemetry. Just a SQLite file at `~/.llm-usage/usage.db`. Privacy is a feature, not a setting.
-- **Multi-provider, Chinese models included.** Anthropic, OpenAI, DeepSeek, Qwen — streaming and non-streaming for all four. DeepSeek and Qwen run the same capture path as Anthropic and OpenAI, not a bolted-on afterthought.
+- **Multi-provider, Chinese models included.** Anthropic, OpenAI, DeepSeek, Qwen — streaming and non-streaming for all four. DeepSeek and Qwen run the same capture path as Anthropic and OpenAI, not a bolted-on afterthought. More providers (Gemini, Bedrock, Moonshot, …) are [on the way](#supported-providers).
 
 ## Quickstart
 
