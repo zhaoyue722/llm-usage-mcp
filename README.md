@@ -2,7 +2,7 @@
 
 > English | [中文](README.zh.md)
 
-Know what your LLM calls actually cost — across every provider, in one place, on your own machine. Ask your coding agent (MCP) or type a command (CLI).
+Stop treating your LLM API bills like a scary horror movie you only look at through your fingers at the end of the month. Know what your LLM calls actually cost — across every provider, in one place, on your own machine. Ask your coding agent (MCP) or type a command (CLI).
 
 [![CI](https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -10,7 +10,7 @@ Know what your LLM calls actually cost — across every provider, in one place, 
 
 ## Why you'd want this
 
-You're calling LLMs from a handful of providers — Claude, GPT, plus Chinese models like Qwen and DeepSeek. Each one bills in its own dashboard, in its own currency, with its own rules for what a "cached token" costs. So the simplest possible question — *how much am I spending, and on what?* — turns into four logins, a manual currency conversion, and reconciling four different cache-pricing models. Most people just... don't, and the bill is a surprise at the end of the month.
+You're calling LLMs from a handful of providers — Claude, GPT, plus Chinese models like Qwen and DeepSeek. Each one bills in its own dashboard, in its own currency, with its own rules for what a "cached token" costs. So the simplest possible question — *how much am I spending, and on what?* — turns into four browser logins, looking up exchange rates for RMB to USD, and trying to decipher what a "cached context token discount" actually means in midnight math. Most people just cross their fingers and let the bill be a surprise at the end of the month.
 
 `llm-usage-mcp` captures every call you make into one local store, costs it correctly per provider at the moment it happens, and hands the answer back **two ways**:
 
@@ -20,7 +20,7 @@ You're calling LLMs from a handful of providers — Claude, GPT, plus Chinese mo
 And it stays out of your way:
 
 - **Local-first.** No SaaS, no signup, no telemetry. Just a SQLite file at `~/.llm-usage/usage.db`. Privacy is a feature, not a setting.
-- **Multi-provider, Chinese models included.** Anthropic, OpenAI, DeepSeek, Qwen — streaming and non-streaming for all four, with DeepSeek and Qwen as first-class citizens rather than afterthoughts.
+- **Multi-provider, Chinese models included.** Anthropic, OpenAI, DeepSeek, Qwen — streaming and non-streaming for all four. DeepSeek and Qwen run the same capture path as Anthropic and OpenAI, not a bolted-on afterthought.
 
 ## Quickstart
 
@@ -140,9 +140,9 @@ $ llm-usage
 |---|---|
 | [`compare`](#compare) | Given a workload, who's cheapest? |
 | [`models`](#models) | What do they actually charge per million tokens? |
-| [`recommend`](#recommend) | Just pick one for me. |
+| [`recommend`](#recommend) | I've got $0.04 left — which model won't bankrupt me? |
 | [`spend`](#spend) | How much did I just spend? |
-| [`status`](#status) | Is everything wired up correctly? |
+| [`status`](#status) | Is everything actually working? |
 | [`providers`](#providers) | What's configured locally? |
 | `proxy` | Run the capture proxy (same as `llm-usage-proxy`). |
 
