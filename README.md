@@ -8,6 +8,8 @@ Stop treating your LLM API bills like a scary horror movie you only look at thro
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 
+![Claude Code answering "how much did I spend?" via llm-usage](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/agent-spend.png)
+
 ## Why you'd want this
 
 You're calling LLMs from a handful of providers — Claude, GPT, plus Chinese models like Qwen and DeepSeek. Each one bills in its own dashboard, in its own currency, with its own rules for what a "cached token" costs. So the simplest possible question — *how much am I spending, and on what?* — turns into four browser logins, looking up exchange rates for RMB to USD, and trying to decipher what a "cached context token discount" actually means in midnight math. Most people just cross their fingers and let the bill be a surprise at the end of the month.
@@ -122,6 +124,8 @@ Claude picks the right tool and reads the numbers back. Seven tools are exposed 
 
 The same questions, as a CLI — seven subcommands under one `llm-usage` console, for when typing is faster than asking your agent.
 
+> The examples below assume `llm-usage` is on your `PATH` — either `source .venv/bin/activate` or `uv tool install .`. Otherwise, prefix each command with `uv run` (e.g. `uv run llm-usage spend`).
+
 ```text
 $ llm-usage
  Local-first LLM spend capture + query, exposed over MCP.
@@ -167,6 +171,8 @@ $ llm-usage compare --in 8000 --out 2000 --model gpt-5-mini --model gpt-5-nano
 # Same projection, JSON for a script:
 $ llm-usage compare --in 8000 --out 2000 --json | jq '.ranked[0]'
 ```
+
+![llm-usage compare ranking models by projected cost](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/cli-compare.png)
 
 #### `models`
 
@@ -216,6 +222,8 @@ $ llm-usage spend --group-by day --project my-side-thing
 ```
 
 Period boundaries are calendar UTC: `today` = since 00:00 UTC, `week` = since Monday, `month` = since the 1st, `year` = since January 1st. Failed / partial-stream rows are excluded by default; opt in with `--include-failed`.
+
+![llm-usage spend headline — totals, top providers, largest call](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/cli-spend.png)
 
 #### `status`
 

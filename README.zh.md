@@ -8,6 +8,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 
+![Claude Code 通过 llm-usage 回答「我花了多少钱？」](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/agent-spend-cn.png)
+
 ## 为什么你需要这个工具
 
 现在做开发，手里多半同时开着好几家大模型：写代码少不了 Claude，日常离不开 GPT，国内直连还得靠 DeepSeek 和通义千问。钱花得悄无声息，可你想回头算笔账却比写代码还头疼：每家一个控制台，计价货币还不统一（有的算美元、有的算人民币），更别提那些千奇百怪的“上下文缓存命中折扣”，四家有四套不同的深夜高数算法。
@@ -146,6 +148,8 @@ claude mcp add llm-usage -- uv --directory $(pwd) run llm-usage-mcp
 
 同样这些问题，换成命令行——七个子命令，全塞在一个 `llm-usage` 命令底下。有时候自己敲一行，比开口问 Agent 还快。
 
+> 下面的示例都假设 `llm-usage` 已经在你的 `PATH` 上——要么 `source .venv/bin/activate`，要么 `uv tool install .`。否则每条命令前面都得加 `uv run`（比如 `uv run llm-usage spend`）。
+
 ```text
 $ llm-usage
  Local-first LLM spend capture + query, exposed over MCP.
@@ -191,6 +195,8 @@ $ llm-usage compare --in 8000 --out 2000 --model gpt-5-mini --model gpt-5-nano
 # 同样的预估，要 JSON 喂给脚本：
 $ llm-usage compare --in 8000 --out 2000 --json | jq '.ranked[0]'
 ```
+
+![llm-usage compare 按预估成本给模型排序](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/cli-compare.png)
 
 #### `models`
 
@@ -240,6 +246,8 @@ $ llm-usage spend --group-by day --project my-side-thing
 ```
 
 时段按自然 UTC 算：`today` 是今天 00:00 UTC 起，`week` 从本周一起，`month` 从 1 号起，`year` 从 1 月 1 号起。失败的、流式中途断掉的记录默认不算进去；想算就加 `--include-failed`。
+
+![llm-usage spend 头条：总额、花得最多的厂商、最贵的一次调用](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/cli-spend.png)
 
 #### `status`
 
