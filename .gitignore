@@ -9,6 +9,14 @@ docs/detailed_plan.md
 # Local-only status snapshot (kept on disk, never pushed)
 docs/status.md
 
+# Local-only backlog / planning notes (kept on disk, never pushed)
+docs/backlog.md
+
+# Local-only agent context + planning / research (kept on disk, never pushed)
+CLAUDE.md
+plan.md
+docs/research/
+
 # Local-only one-off review / re-evaluation notes (kept on disk, never pushed)
 docs/re_evaluation_*.md
 
