@@ -8,7 +8,7 @@ Stop treating your LLM API bills like a scary horror movie you only look at thro
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 
-![Claude Code answering "how much did I spend?" via llm-usage](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/agent-spend.png)
+![Claude Code answering "how much did I spend?" via llm-usage](docs/assets/agent-spend.png)
 
 ## Why you'd want this
 
@@ -172,7 +172,7 @@ $ llm-usage compare --in 8000 --out 2000 --model gpt-5-mini --model gpt-5-nano
 $ llm-usage compare --in 8000 --out 2000 --json | jq '.ranked[0]'
 ```
 
-![llm-usage compare ranking models by projected cost](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/cli-compare.png)
+![llm-usage compare ranking models by projected cost](docs/assets/cli-compare.png)
 
 #### `models`
 
@@ -223,7 +223,7 @@ $ llm-usage spend --group-by day --project my-side-thing
 
 Period boundaries are calendar UTC: `today` = since 00:00 UTC, `week` = since Monday, `month` = since the 1st, `year` = since January 1st. Failed / partial-stream rows are excluded by default; opt in with `--include-failed`.
 
-![llm-usage spend headline — totals, top providers, largest call](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/cli-spend.png)
+![llm-usage spend headline — totals, top providers, largest call](docs/assets/cli-spend.png)
 
 #### `status`
 
