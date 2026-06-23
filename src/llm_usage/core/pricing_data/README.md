@@ -105,3 +105,23 @@ Sparing. Three legitimate cases:
 ### Survives the weekly refresh
 
 `scripts/refresh_pricing.sh` only writes `prices.json`. `pricing_overrides.json` is untouched on refresh — that's the whole point of keeping the two files separate.
+
+### Drift detection (keeps overrides from going stale)
+
+Because overrides win over LiteLLM *unconditionally*, a forgotten one silently masks correct upstream prices — e.g. a stale `deepseek-v4-pro` pin 4x-overcharged until it was caught. `detect_override_drift()` (exercised by `tests/test_pricing_drift.py`, so it runs in CI) compares every override against the raw LiteLLM catalog and classifies it:
+
+- **redundant** — the pinned price now matches LiteLLM. CI **fails**: delete the entry, LiteLLM has it covered.
+- **diverged** — the pin differs from LiteLLM. CI **passes** but emits a warning with the delta, so a reviewer re-confirms the pin is still intentional during the next pricing-refresh PR.
+- **gap_fill** — LiteLLM doesn't carry the model; the override is the only source. Fine.
+
+Document *why* each override exists with optional `_reason` and `_added` keys — the loader and drift check ignore any `_`-prefixed field:
+
+```jsonc
+"deepseek/some-model": {
+  "litellm_provider": "deepseek",
+  "input_cost_per_token": 1.0e-6,
+  "output_cost_per_token": 2.0e-6,
+  "_reason": "LiteLLM still lists the launch-promo rate",
+  "_added": "2026-06-23"
+}
+```

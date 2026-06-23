@@ -51,8 +51,9 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from importlib.resources import files
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from llm_usage.core.pricing import Pricing, Tier
 
@@ -81,11 +82,16 @@ def load_vendored_pricing(*, fetched_at: int | None = None) -> list[Pricing]:
     `prices.json` before parsing — see this module's docstring for the
     merge rules.
     """
-    base_text = files("llm_usage.core.pricing_data").joinpath("prices.json").read_text()
-    base: dict[str, dict[str, Any]] = json.loads(base_text)
+    base = _load_base()
     overrides = _load_overrides()
     data = _merge_overrides(base, overrides)
     return _convert_all(data, fetched_at=fetched_at)
+
+
+def _load_base() -> dict[str, dict[str, Any]]:
+    """Load the raw vendored LiteLLM snapshot (`prices.json`)."""
+    text = files("llm_usage.core.pricing_data").joinpath("prices.json").read_text()
+    return cast(dict[str, dict[str, Any]], json.loads(text))
 
 
 def _load_overrides() -> dict[str, dict[str, Any]]:
@@ -129,6 +135,81 @@ def _merge_overrides(
         existing = merged.get(key, {})
         merged[key] = {**existing, **override_entry}
     return merged
+
+
+# Cost-bearing fields the loader actually reads. Drift detection compares
+# only these — an override re-stating `mode` or `source` without changing
+# a price isn't meaningfully pinning anything. `_`-prefixed keys (e.g.
+# `_reason`, `_added` documentation metadata) are ignored everywhere:
+# `parse_litellm_entry` doesn't read them and neither does drift.
+_PRICE_FIELDS: tuple[str, ...] = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "cache_read_input_token_cost",
+    "cache_creation_input_token_cost",
+)
+
+
+@dataclass(frozen=True)
+class OverrideDrift:
+    """One override entry's standing against the LiteLLM base catalog.
+
+    - ``redundant``: every price field the override pins already matches
+      LiteLLM (or it pins no price field at all) — the override is dead
+      weight and should be deleted.
+    - ``diverged``: at least one price field differs from LiteLLM — an
+      intentional pin. ``detail`` carries the per-field deltas so a
+      reviewer can re-confirm it's still wanted.
+    - ``gap_fill``: LiteLLM doesn't carry this key — the override is the
+      only source, nothing to drift against.
+    """
+
+    key: str
+    kind: Literal["redundant", "diverged", "gap_fill"]
+    detail: str
+
+
+def detect_override_drift() -> list[OverrideDrift]:
+    """Compare the vendored overrides against the raw LiteLLM catalog.
+
+    Loads the real `prices.json` + `pricing_overrides.json` and returns
+    one finding per override entry. Drives the CI drift test (fail on
+    ``redundant``, surface ``diverged``); safe to call anytime — empty
+    overrides yield an empty list.
+    """
+    return _detect_drift(_load_base(), _load_overrides())
+
+
+def _detect_drift(
+    base: dict[str, dict[str, Any]],
+    overrides: dict[str, dict[str, Any]],
+) -> list[OverrideDrift]:
+    findings: list[OverrideDrift] = []
+    for key, override_entry in overrides.items():
+        base_entry = base.get(key)
+        if base_entry is None:
+            findings.append(
+                OverrideDrift(key, "gap_fill", "not in LiteLLM; override is the only source")
+            )
+            continue
+        pinned = {f: override_entry[f] for f in _PRICE_FIELDS if f in override_entry}
+        deltas = {f: (base_entry.get(f), v) for f, v in pinned.items() if base_entry.get(f) != v}
+        if deltas:
+            detail = ", ".join(
+                f"{f}: LiteLLM={b!r} vs override={o!r}" for f, (b, o) in deltas.items()
+            )
+            findings.append(OverrideDrift(key, "diverged", detail))
+        elif not pinned:
+            findings.append(
+                OverrideDrift(key, "redundant", "pins no price field; nothing to override")
+            )
+        else:
+            findings.append(
+                OverrideDrift(
+                    key, "redundant", "all pinned price fields match LiteLLM; safe to remove"
+                )
+            )
+    return findings
 
 
 def _convert_all(
