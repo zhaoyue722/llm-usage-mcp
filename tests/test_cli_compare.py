@@ -94,7 +94,10 @@ def test_compare_text_output_contains_header_divider_and_footnote(
     assert result.exit_code == 0
     assert "projecting cost for 100 in" in result.stdout
     assert "─" in result.stdout
-    assert "note: cache pricing not applied" in result.stdout
+    assert "cache pricing not applied" in result.stdout
+    # Regression: compare has no --cache option, so the footnote must
+    # not tell the user to "use --cache".
+    assert "--cache" not in result.stdout
 
 
 # --- JSON output -----------------------------------------------------------

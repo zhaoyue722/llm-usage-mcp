@@ -229,7 +229,11 @@ def format_compare_result(
         )
 
     lines.append(_style(_DIVIDER, color_enabled, dim=True))
-    lines.append(_style("note: cache pricing not applied (use --cache)", color_enabled, dim=True))
+    lines.append(
+        _style(
+            "note: cost is input + output only; cache pricing not applied", color_enabled, dim=True
+        )
+    )
     if show_variants:
         lines.append(
             _style(

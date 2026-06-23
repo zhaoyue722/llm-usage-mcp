@@ -122,6 +122,8 @@ def test_non_empty_result_has_header_divider_rows_footnote() -> None:
     assert "mid-1" in lines[3]
     assert lines[4].startswith("─")
     assert "cache pricing not applied" in lines[5]
+    # compare has no --cache flag; the footnote must not advertise one.
+    assert "--cache" not in out
 
 
 def test_header_includes_terse_token_counts() -> None:
