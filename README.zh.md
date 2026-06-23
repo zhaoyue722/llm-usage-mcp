@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 
-![Claude Code 通过 llm-usage 回答「我花了多少钱？」](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/agent-spend-cn.png)
+![Claude Code 通过 llm-usage 回答「我花了多少钱？」](docs/assets/agent-spend-cn.png)
 
 ## 为什么你需要这个工具
 
@@ -196,7 +196,7 @@ $ llm-usage compare --in 8000 --out 2000 --model gpt-5-mini --model gpt-5-nano
 $ llm-usage compare --in 8000 --out 2000 --json | jq '.ranked[0]'
 ```
 
-![llm-usage compare 按预估成本给模型排序](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/cli-compare.png)
+![llm-usage compare 按预估成本给模型排序](docs/assets/cli-compare.png)
 
 #### `models`
 
@@ -247,7 +247,7 @@ $ llm-usage spend --group-by day --project my-side-thing
 
 时段按自然 UTC 算：`today` 是今天 00:00 UTC 起，`week` 从本周一起，`month` 从 1 号起，`year` 从 1 月 1 号起。失败的、流式中途断掉的记录默认不算进去；想算就加 `--include-failed`。
 
-![llm-usage spend 头条：总额、花得最多的厂商、最贵的一次调用](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/cli-spend.png)
+![llm-usage spend 头条：总额、花得最多的厂商、最贵的一次调用](docs/assets/cli-spend.png)
 
 #### `status`
 

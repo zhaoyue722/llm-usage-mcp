@@ -477,17 +477,18 @@ def test_merge_overrides_does_not_mutate_inputs() -> None:
     assert overrides == overrides_snapshot
 
 
-def test_load_vendored_includes_overrides_for_deepseek_v4_flash() -> None:
-    """End-to-end: the override file's deepseek-v4-flash entry shows up
-    as a real Pricing after `load_vendored_pricing`."""
+def test_load_vendored_includes_deepseek_v4_flash() -> None:
+    """The vendored catalog prices deepseek-v4-flash correctly.
+
+    Values come straight from LiteLLM now (no local override needed —
+    see api-docs.deepseek.com). Input $0.14/M, output $0.28/M.
+    """
     records = load_vendored_pricing(fetched_at=1)
     v4_flash = next(
         (p for p in records if p.provider == "deepseek" and p.model == "deepseek-v4-flash"),
         None,
     )
     assert v4_flash is not None
-    # Source: api-docs.deepseek.com (2026-05-25).
-    # Input $0.14/M = 1.4e-7 USD/token; output $0.28/M = 2.8e-7 USD/token.
     assert v4_flash.input_per_million_usd == pytest.approx(0.14)
     assert v4_flash.output_per_million_usd == pytest.approx(0.28)
     # Cache hit $0.0028/M; cache creation is $0 (DeepSeek bills writes
@@ -496,16 +497,21 @@ def test_load_vendored_includes_overrides_for_deepseek_v4_flash() -> None:
     assert v4_flash.cache_write_per_million_usd == 0.0
 
 
-def test_load_vendored_includes_overrides_for_deepseek_v4_pro() -> None:
-    """The v4-pro entry uses post-promo (steady-state) rates."""
+def test_load_vendored_includes_deepseek_v4_pro() -> None:
+    """The vendored catalog prices deepseek-v4-pro correctly.
+
+    Real DeepSeek rates (api-docs.deepseek.com): input $0.435/M, output
+    $0.87/M, cache hit $0.003625/M. The earlier local override pinned
+    $1.74/$3.48 on a wrong "post-promo" guess; LiteLLM now carries the
+    real numbers, so the override was dropped.
+    """
     records = load_vendored_pricing(fetched_at=1)
     v4_pro = next(
         (p for p in records if p.provider == "deepseek" and p.model == "deepseek-v4-pro"),
         None,
     )
     assert v4_pro is not None
-    # Post-promo rates (the 75%-off promo ends 2026-05-31).
-    # Input $1.74/M = 1.74e-6 USD/token; output $3.48/M = 3.48e-6 USD/token.
-    assert v4_pro.input_per_million_usd == pytest.approx(1.74)
-    assert v4_pro.output_per_million_usd == pytest.approx(3.48)
-    assert v4_pro.cache_read_per_million_usd == pytest.approx(0.0145)
+    assert v4_pro.input_per_million_usd == pytest.approx(0.435)
+    assert v4_pro.output_per_million_usd == pytest.approx(0.87)
+    assert v4_pro.cache_read_per_million_usd == pytest.approx(0.003625)
+    assert v4_pro.cache_write_per_million_usd == 0.0
