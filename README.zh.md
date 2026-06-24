@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/watch-pom.png" alt="llm-usage-mcp" width="140">
+  <img src="https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/watch-pom.png" alt="llm-usage-mcp" width="140">
 </p>
 
 <h1 align="center">llm-usage-mcp</h1>
@@ -8,15 +8,15 @@
 
 <p align="center">
   <a href="https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml"><img src="https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/zhaoyue722/llm-usage-mcp/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.13%2B-blue.svg" alt="Python 3.13+"></a>
 </p>
 
-<p align="center"><a href="README.md">English</a> | 中文</p>
+<p align="center"><a href="https://github.com/zhaoyue722/llm-usage-mcp/blob/main/README.md">English</a> | 中文</p>
 
 别再把每月的大模型 API 账单当恐怖片看了——就是那种捂着眼睛、只敢漏出一条指缝看余额的恐怖片。这个工具帮你把账算得明明白白，全程本地，不上云，不当冤大头。查账的时候，既能让编码 Agent 替你开口问（[MCP](https://modelcontextprotocol.io)），也能自己敲命令行（CLI）。
 
-![Claude Code 通过 llm-usage 回答「我花了多少钱？」](docs/assets/agent-spend-cn.png)
+![Claude Code 通过 llm-usage 回答「我花了多少钱？」](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/agent-spend-cn.png)
 
 ## 为什么你需要这个工具
 
@@ -40,17 +40,27 @@
 
 ### 1. 安装
 
+用 [uv](https://docs.astral.sh/uv/)（或 `pipx`）从 PyPI 装，三个命令会直接进你的 `PATH`：
+
+```bash
+uv tool install llm-usage-mcp   # 或者：pipx install llm-usage-mcp
+```
+
+想自己改代码？那就从源码 clone 下来再 sync：
+
 ```bash
 git clone https://github.com/zhaoyue722/llm-usage-mcp.git
 cd llm-usage-mcp
 uv sync
 ```
 
-`uv sync` 会把项目和开发依赖一起装好，顺手在 venv 里建三个命令：
+两种方式都会给你三个命令：
 
-- `llm-usage`：主命令行工具，七个子命令，详见后面的 [查看你的花费](#查看你的花费) 一节。
+- `llm-usage`：主命令行工具，八个子命令，详见后面的 [查看你的花费](#查看你的花费) 一节。
 - `llm-usage-mcp`：stdio 模式的 MCP 服务器。
 - `llm-usage-proxy`：抓取代理。其实就是 `llm-usage proxy` 的别名，为了向后兼容留着。
+
+> 下面的「两分钟跑起来」用的是 `uv run …`（从源码跑的写法）。如果你是从 PyPI 装的，这些命令已经在 `PATH` 上了——把 `uv run` 前缀去掉就行，注册 MCP 服务器用 `claude mcp add llm-usage -- llm-usage-mcp`。
 
 > 还没装 [uv](https://docs.astral.sh/uv/) 的话，`pip install uv` 装一次就有，国内建议配个镜像源。Python 版本需要 3.13 以上。
 
@@ -68,9 +78,9 @@ export DEEPSEEK_API_KEY=sk-...
 export DASHSCOPE_API_KEY=sk-...   # 通义千问，在阿里云 DashScope 控制台拿
 ```
 
-> **关于网络。** Anthropic 和 OpenAI 的官方接口在国内一般直连不了，得走境外网络。如果你用的是第三方反代或自建网关，把对应的 `*_BASE_URL` 指过去就行（见 [`docs/configuration.md`](docs/configuration.md)）。DeepSeek 和 DashScope 走国内公网，直连没问题。
+> **关于网络。** Anthropic 和 OpenAI 的官方接口在国内一般直连不了，得走境外网络。如果你用的是第三方反代或自建网关，把对应的 `*_BASE_URL` 指过去就行（见 [`docs/configuration.md`](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/docs/configuration.md)）。DeepSeek 和 DashScope 走国内公网，直连没问题。
 
-完整的环境变量清单见 [`docs/configuration.md`](docs/configuration.md)；嫌翻文档麻烦，也可以把 [`.env.example`](.env.example) 复制成 `.env` 填一填。
+完整的环境变量清单见 [`docs/configuration.md`](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/docs/configuration.md)；嫌翻文档麻烦，也可以把 [`.env.example`](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/.env.example) 复制成 `.env` 填一填。
 
 ### 3. 启动抓取代理
 
@@ -138,7 +148,7 @@ claude mcp add llm-usage -- uv --directory $(pwd) run llm-usage-mcp
 
 > 今天我在 Anthropic 上花了多少？跑一次 10k 输入 / 2k 输出，哪家最便宜？
 
-剩下的交给 Claude：它会自己挑合适的工具、把数字读回来。一共七个工具，通过 stdio 暴露；完整的参数和返回值见 [`docs/spec.md`](docs/spec.md)。
+剩下的交给 Claude：它会自己挑合适的工具、把数字读回来。一共七个工具，通过 stdio 暴露；完整的参数和返回值见 [`docs/spec.md`](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/docs/spec.md)。
 
 | 工具 | 作用 |
 |---|---|
@@ -206,7 +216,7 @@ $ llm-usage compare --in 8000 --out 2000 --model gpt-5-mini --model gpt-5-nano
 $ llm-usage compare --in 8000 --out 2000 --json | jq '.ranked[0]'
 ```
 
-![llm-usage compare 按预估成本给模型排序](docs/assets/cli-compare.png)
+![llm-usage compare 按预估成本给模型排序](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/cli-compare.png)
 
 #### `models`
 
@@ -257,7 +267,7 @@ $ llm-usage spend --group-by day --project my-side-thing
 
 时段按自然 UTC 算：`today` 是今天 00:00 UTC 起，`week` 从本周一起，`month` 从 1 号起，`year` 从 1 月 1 号起。失败的、流式中途断掉的记录默认不算进去；想算就加 `--include-failed`。
 
-![llm-usage spend 头条：总额、花得最多的厂商、最贵的一次调用](docs/assets/cli-spend.png)
+![llm-usage spend 头条：总额、花得最多的厂商、最贵的一次调用](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/cli-spend.png)
 
 #### `status`
 
@@ -302,13 +312,13 @@ $ llm-usage about --json
 | DeepSeek | `Bearer` | 是 | 是 | `prompt_cache_hit_tokens` / `_miss_tokens` |
 | Qwen (DashScope) | `Bearer` | 是 | 是 | OpenAI 兼容端点上通常不返回 |
 
-**还有更多在路上。** Google Gemini、AWS Bedrock、Moonshot（Kimi）、Zhipu GLM、MiniMax、文心一言这些都排在计划里，具体工作量和坑见 [`docs/post_v1_providers.md`](docs/post_v1_providers.md)（英文）。
+**还有更多在路上。** Google Gemini、AWS Bedrock、Moonshot（Kimi）、Zhipu GLM、MiniMax、文心一言这些都排在计划里，具体工作量和坑见 [`docs/post_v1_providers.md`](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/docs/post_v1_providers.md)（英文）。
 
 **价格是哪来的。** 定价取自 [LiteLLM 的定价 JSON](https://github.com/BerriAI/litellm/blob/main/litellm/model_prices_and_context_window_backup.json) 的精简快照，有个 GitHub Action 每周自动拉一次最新的（[`refresh-pricing.yml`](.github/workflows/refresh-pricing.yml)）。LiteLLM 还没收录的型号（比如 2026-05 之后才上线的 `deepseek-v4-flash`），用 [`pricing_overrides.json`](src/llm_usage/core/pricing_data/pricing_overrides.json) 在本地补上。
 
 ## 配置
 
-配置全走环境变量（或者仓库根目录下的 `.env`）。默认值就够用，启动 proxy 不强制要求任何一项。完整清单见 [`docs/configuration.md`](docs/configuration.md)。最可能动的三个：
+配置全走环境变量（或者仓库根目录下的 `.env`）。默认值就够用，启动 proxy 不强制要求任何一项。完整清单见 [`docs/configuration.md`](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/docs/configuration.md)。最可能动的三个：
 
 | 变量 | 默认值 | 作用 |
 |---|---|---|
@@ -318,4 +328,4 @@ $ llm-usage about --json
 
 ## 许可证
 
-[MIT](LICENSE)。
+[MIT](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/LICENSE)。

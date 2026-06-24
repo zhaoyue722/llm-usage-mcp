@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/watch-pom.png" alt="llm-usage-mcp" width="140">
+  <img src="https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/watch-pom.png" alt="llm-usage-mcp" width="140">
 </p>
 
 <h1 align="center">llm-usage-mcp</h1>
@@ -8,15 +8,15 @@
 
 <p align="center">
   <a href="https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml"><img src="https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/zhaoyue722/llm-usage-mcp/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.13%2B-blue.svg" alt="Python 3.13+"></a>
 </p>
 
-<p align="center">English | <a href="README.zh.md">中文</a></p>
+<p align="center">English | <a href="https://github.com/zhaoyue722/llm-usage-mcp/blob/main/README.zh.md">中文</a></p>
 
 Stop treating your LLM API bills like a scary horror movie you only look at through your fingers at the end of the month. Know what your LLM calls actually cost — across every provider, in one place, on your own machine. Ask your coding agent (MCP) or type a command (CLI).
 
-![Claude Code answering "how much did I spend?" via llm-usage](docs/assets/agent-spend.png)
+![Claude Code answering "how much did I spend?" via llm-usage](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/agent-spend.png)
 
 ## Why you'd want this
 
@@ -38,16 +38,26 @@ Two minutes from `git clone` to your first captured call. This part is about **c
 
 ### 1. Install
 
+Install from PyPI with [uv](https://docs.astral.sh/uv/) (or `pipx`) — this puts the three console scripts on your `PATH`:
+
+```bash
+uv tool install llm-usage-mcp   # or: pipx install llm-usage-mcp
+```
+
+Prefer to hack on it? Clone and sync from source instead:
+
 ```bash
 git clone https://github.com/zhaoyue722/llm-usage-mcp.git
 cd llm-usage-mcp
 uv sync
 ```
 
-`uv sync` installs the project + dev deps and creates three console scripts in the venv:
+Either way you get three console scripts:
 - `llm-usage` — the multi-command CLI. See [From the command line (CLI)](#from-the-command-line-cli) below.
 - `llm-usage-mcp` — the stdio MCP server.
 - `llm-usage-proxy` — a back-compat alias; identical to `llm-usage proxy`.
+
+> The Quickstart below uses `uv run …` (the from-source workflow). If you installed from PyPI, the scripts are already on your `PATH` — drop the `uv run` prefix, and register the MCP server with `claude mcp add llm-usage -- llm-usage-mcp`.
 
 ### 2. Set at least one API key
 
@@ -61,7 +71,7 @@ export DEEPSEEK_API_KEY=sk-...
 export DASHSCOPE_API_KEY=sk-...   # Qwen
 ```
 
-Full env-var reference: [`docs/configuration.md`](docs/configuration.md) (or copy [`.env.example`](.env.example) to `.env` and fill in).
+Full env-var reference: [`docs/configuration.md`](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/docs/configuration.md) (or copy [`.env.example`](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/.env.example) to `.env` and fill in).
 
 ### 3. Run the capture proxy
 
@@ -114,7 +124,7 @@ Then just ask, in plain English, inside that session:
 
 > How much did I spend on Anthropic today? Which provider is cheapest for a 10k-input / 2k-output call?
 
-Claude picks the right tool and reads the numbers back. Seven tools are exposed over stdio; full param/return shapes are in [`docs/spec.md`](docs/spec.md).
+Claude picks the right tool and reads the numbers back. Seven tools are exposed over stdio; full param/return shapes are in [`docs/spec.md`](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/docs/spec.md).
 
 | Tool | Purpose |
 |---|---|
@@ -182,7 +192,7 @@ $ llm-usage compare --in 8000 --out 2000 --model gpt-5-mini --model gpt-5-nano
 $ llm-usage compare --in 8000 --out 2000 --json | jq '.ranked[0]'
 ```
 
-![llm-usage compare ranking models by projected cost](docs/assets/cli-compare.png)
+![llm-usage compare ranking models by projected cost](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/cli-compare.png)
 
 #### `models`
 
@@ -233,7 +243,7 @@ $ llm-usage spend --group-by day --project my-side-thing
 
 Period boundaries are calendar UTC: `today` = since 00:00 UTC, `week` = since Monday, `month` = since the 1st, `year` = since January 1st. Failed / partial-stream rows are excluded by default; opt in with `--include-failed`.
 
-![llm-usage spend headline — totals, top providers, largest call](docs/assets/cli-spend.png)
+![llm-usage spend headline — totals, top providers, largest call](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/cli-spend.png)
 
 #### `status`
 
@@ -278,13 +288,13 @@ $ llm-usage about --json
 | DeepSeek | `Bearer` | yes | yes | `prompt_cache_hit_tokens` / `_miss_tokens` |
 | Qwen (DashScope) | `Bearer` | yes | yes | usually omitted on the OpenAI-compat endpoint |
 
-**More on the way.** Google Gemini, AWS Bedrock, Moonshot (Kimi), Zhipu GLM, MiniMax, and others are scoped in [`docs/post_v1_providers.md`](docs/post_v1_providers.md).
+**More on the way.** Google Gemini, AWS Bedrock, Moonshot (Kimi), Zhipu GLM, MiniMax, and others are scoped in [`docs/post_v1_providers.md`](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/docs/post_v1_providers.md).
 
 **Where prices come from.** Pricing is a vendored, trimmed snapshot of [LiteLLM's pricing JSON](https://github.com/BerriAI/litellm/blob/main/litellm/model_prices_and_context_window_backup.json), refreshed weekly by a GitHub Action ([`refresh-pricing.yml`](.github/workflows/refresh-pricing.yml)). Models LiteLLM doesn't carry yet are filled in locally via [`pricing_overrides.json`](src/llm_usage/core/pricing_data/pricing_overrides.json).
 
 ## Configuration
 
-Everything is env vars (or a `.env` file at the repo root). Defaults are sane — nothing is required to start the proxy. Full reference: [`docs/configuration.md`](docs/configuration.md). The three you're most likely to touch:
+Everything is env vars (or a `.env` file at the repo root). Defaults are sane — nothing is required to start the proxy. Full reference: [`docs/configuration.md`](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/docs/configuration.md). The three you're most likely to touch:
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -294,4 +304,4 @@ Everything is env vars (or a `.env` file at the repo root). Defaults are sane �
 
 ## License
 
-[MIT](LICENSE).
+[MIT](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/LICENSE).
