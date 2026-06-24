@@ -1,16 +1,20 @@
 <p align="center">
-  <img src="docs/assets/watch-pom.png" alt="llm-usage-mcp watch-pom" width="160">
+  <img src="docs/assets/watch-pom.png" alt="llm-usage-mcp" width="140">
 </p>
 
-# llm-usage-mcp
+<h1 align="center">llm-usage-mcp</h1>
 
-> English | [中文](README.zh.md)
+<p align="center"><em>your LLM spend watchdog</em></p>
+
+<p align="center">
+  <a href="https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml"><img src="https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.13%2B-blue.svg" alt="Python 3.13+"></a>
+</p>
+
+<p align="center">English | <a href="README.zh.md">中文</a></p>
 
 Stop treating your LLM API bills like a scary horror movie you only look at through your fingers at the end of the month. Know what your LLM calls actually cost — across every provider, in one place, on your own machine. Ask your coding agent (MCP) or type a command (CLI).
-
-[![CI](https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 
 ![Claude Code answering "how much did I spend?" via llm-usage](docs/assets/agent-spend.png)
 
