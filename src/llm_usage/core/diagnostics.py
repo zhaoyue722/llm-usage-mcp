@@ -39,12 +39,11 @@ import socket
 from importlib import metadata
 from pathlib import Path
 
-from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import func, select, text
 from sqlalchemy.engine.url import make_url
 
-from llm_usage.bootstrap import _find_alembic_root
+from llm_usage.bootstrap import _alembic_config
 from llm_usage.config import KNOWN_PROVIDERS, Provider, Settings
 from llm_usage.core.db.models import PricingSnapshot, UsageEvent
 from llm_usage.core.db.session import get_session
@@ -179,8 +178,7 @@ def _schema_at_head(rev: str | None) -> bool:
     if rev is None:
         return False
     try:
-        cfg = Config(str(_find_alembic_root() / "alembic.ini"))
-        head = ScriptDirectory.from_config(cfg).get_current_head()
+        head = ScriptDirectory.from_config(_alembic_config()).get_current_head()
     except Exception:
         return False
     return rev == head

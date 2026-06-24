@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import func, inspect, select
 
 from llm_usage.bootstrap import (
-    _find_alembic_root,
+    _MIGRATIONS_DIR,
     bootstrap,
     materialize_pricing,
     migrate_to_head,
@@ -34,10 +34,15 @@ def _table_names() -> set[str]:
     return set(inspect(get_engine()).get_table_names())
 
 
-def test_find_alembic_root_returns_directory_with_ini_and_alembic_dir() -> None:
-    root = _find_alembic_root()
-    assert (root / "alembic.ini").is_file()
-    assert (root / "alembic").is_dir()
+def test_migrations_are_bundled_in_the_package() -> None:
+    """Regression for v0.1.0: the migrations must ship *inside* the package
+    so `bootstrap()` works from a pip-installed wheel, not just a source
+    checkout. v0.1.0 kept `alembic/` at the repo root, which the build
+    backend never packaged, so every installed boot raised
+    'alembic.ini not found'."""
+    assert _MIGRATIONS_DIR.is_dir()
+    assert (_MIGRATIONS_DIR / "env.py").is_file()
+    assert list((_MIGRATIONS_DIR / "versions").glob("*.py")), "no migration scripts bundled"
 
 
 def test_migrate_to_head_creates_all_tables(db_url: str) -> None:

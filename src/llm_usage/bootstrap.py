@@ -6,11 +6,11 @@ steps are exposed separately so tests (and future tooling like an
 
 - `migrate_to_head()` runs `alembic upgrade head` programmatically. The
   command is idempotent: at-head is a no-op, missing revisions get
-  applied. We locate `alembic.ini` by walking up from this file until
-  we find it — works for `uv run llm-usage-mcp` from a development
-  checkout, which is the v1 distribution model. Packaging the
-  migrations as package data is a follow-up for PyPI publishing
-  (Day 12-13 in the action plan).
+  applied. The migrations ship *inside* the package
+  (`llm_usage/migrations/`), so we point Alembic's `script_location`
+  at that bundled directory via `__file__` — this works identically
+  from a development checkout and from a `pip install`ed wheel (the
+  root `alembic.ini` is only for the dev `alembic` autogenerate CLI).
 - `materialize_pricing()` loads the vendored LiteLLM JSON (merged with
   `pricing_overrides.json`) via `load_vendored_pricing()` and upserts
   every entry on every boot. The upsert is idempotent by
@@ -38,32 +38,34 @@ from llm_usage.core.pricing_loader import load_vendored_pricing
 
 logger = logging.getLogger(__name__)
 
+# The migrations ship inside the package (`llm_usage/migrations/`), so this
+# resolves correctly whether running from a source checkout or an installed
+# wheel — the fix for v0.1.0's "alembic.ini not found" boot failure on
+# `pip install`. The root `alembic.ini` is only for the dev autogenerate CLI.
+_MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
-def _find_alembic_root() -> Path:
-    """Walk up from this module to find the repo root holding `alembic.ini`.
 
-    Raises `RuntimeError` if no parent contains both `alembic.ini` and an
-    `alembic/` directory — the standard layout. The error message points
-    at the v1 distribution model (development checkout) so a future
-    pip-installed user gets a clear signal that migrations weren't
-    bundled.
+def _alembic_config() -> Config:
+    """Alembic `Config` pointed at the bundled migrations (no ini file).
+
+    Shared by `migrate_to_head()` (which then adds the DB URL) and the
+    `status` diagnostics (which only needs the script directory to read
+    the head revision). Building it programmatically is what lets the
+    installed wheel migrate without an `alembic.ini` on disk.
     """
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        if (parent / "alembic.ini").is_file() and (parent / "alembic").is_dir():
-            return parent
-    raise RuntimeError(
-        "alembic.ini not found in any parent directory of llm_usage. "
-        "Run from a development checkout (`uv run llm-usage-mcp` in the "
-        "repo), or wait for a release that bundles migrations as package "
-        "data."
-    )
+    cfg = Config()
+    cfg.set_main_option("script_location", str(_MIGRATIONS_DIR))
+    return cfg
 
 
 def migrate_to_head() -> None:
-    """Run `alembic upgrade head` against the configured DB. Idempotent."""
-    root = _find_alembic_root()
-    cfg = Config(str(root / "alembic.ini"))
+    """Run `alembic upgrade head` against the configured DB. Idempotent.
+
+    `migrations/env.py` resolves the database URL itself via
+    `resolve_db_url()`, so the `sqlalchemy.url` set here is a
+    belt-and-braces default.
+    """
+    cfg = _alembic_config()
     db_url = get_settings().db_url
     cfg.set_main_option("sqlalchemy.url", db_url)
     _ensure_sqlite_parent_dir(db_url)
