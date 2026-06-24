@@ -6,6 +6,12 @@ All notable changes to `llm-usage-mcp` are recorded here. The format follows [Ke
 
 Nothing yet.
 
+## [0.1.1] — 2026-06-24
+
+### Fixed
+
+- Fix packaged installs. In v0.1.0, Alembic migrations lived outside the llm_usage package and were not included in the wheel, causing all installed llm-usage-mcp and llm-usage-proxy executions to fail with alembic.ini not found. Migrations are now bundled under llm_usage/migrations/, and bootstrap() resolves them relative to __file__, allowing fresh installs to initialize and migrate correctly.
+
 ## [0.1.0] — 2026-06-24
 
 The initial public release: local-first MCP server that captures LLM API spend across Anthropic, OpenAI, DeepSeek, and Qwen, and exposes spend / pricing / recommendation queries as MCP tools.
@@ -90,5 +96,6 @@ The initial public release: local-first MCP server that captures LLM API spend a
 - **`compare_providers.notes` is always `None`.** Field is reserved for future per-row caveats.
 - **Bedrock pricing is not region-aware.** The `pricing_snapshot` schema doesn't carry a region column. Out of v1 scope; revisit when Bedrock support lands.
 
-[Unreleased]: https://github.com/zhaoyue722/llm-usage-mcp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/zhaoyue722/llm-usage-mcp/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/zhaoyue722/llm-usage-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/zhaoyue722/llm-usage-mcp/releases/tag/v0.1.0
