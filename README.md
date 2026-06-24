@@ -1,8 +1,6 @@
-<!-- Brand logo. Save your watch-pom mark to docs/assets/watch-pom.png and uncomment:
 <p align="center">
   <img src="docs/assets/watch-pom.png" alt="llm-usage-mcp watch-pom" width="160">
 </p>
--->
 
 # llm-usage-mcp
 
@@ -258,7 +256,7 @@ $ llm-usage providers --models   # expand each provider with its model list
 
 #### `about`
 
-The front-door panel: version, author, license, and the project homepage, next to the watch-pom. The human-facing companion to `--version` — fields are read from the installed package metadata, so they match what PyPI shows.
+The front-door panel: version, author, license, and the project homepage. The human-facing companion to `--version` — fields are read from the installed package metadata, so they match what PyPI shows.
 
 ```bash
 $ llm-usage about

@@ -1,8 +1,7 @@
-<!-- 品牌 logo。把你的 watch-pom 图标存到 docs/assets/watch-pom.png，然后取消注释：
 <p align="center">
   <img src="docs/assets/watch-pom.png" alt="llm-usage-mcp watch-pom" width="160">
 </p>
--->
+
 
 # llm-usage-mcp
 
