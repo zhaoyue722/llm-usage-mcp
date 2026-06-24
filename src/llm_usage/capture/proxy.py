@@ -157,30 +157,42 @@ def run_proxy(*, port: int | None = None, log_level: str | None = None) -> None:
     )
 
 
-def _build_startup_banner(settings: Settings, port: int) -> str:
-    """Assemble banner data and render the watch-pom + info panel.
-
-    Resolves the package version, the on-disk DB path (with `$HOME`
-    abbreviated to `~`), and each provider's key state + client base
-    URL, then defers the actual layout to `cli_render.format_proxy_banner`.
-    Color follows the same `NO_COLOR` / TTY rules as the CLI.
-    """
-    import os
-    import sys
+def _banner_version() -> str:
+    """Installed package version, or 'unknown' from a non-installed tree."""
     from importlib import metadata
+
+    try:
+        return metadata.version("llm-usage-mcp")
+    except metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def _banner_db_path(db_url: str) -> str:
+    """The on-disk DB path for display, with `$HOME` abbreviated to `~`."""
+    import os
 
     from sqlalchemy.engine.url import make_url
 
+    db = make_url(db_url).database or db_url
+    home = os.path.expanduser("~")
+    return "~" + db[len(home) :] if db.startswith(home) else db
+
+
+def _build_startup_banner(settings: Settings, port: int) -> str:
+    """Assemble banner data and render the watch-pom + info panel.
+
+    Resolves the package version, the on-disk DB path, and each provider's
+    key state + client base URL, then defers the actual layout to
+    `cli_render.format_proxy_banner`. Color follows the same `NO_COLOR` /
+    TTY rules as the CLI.
+    """
+    import os
+    import sys
+
     from llm_usage.cli_render import format_proxy_banner
 
-    try:
-        pkg_version = metadata.version("llm-usage-mcp")
-    except metadata.PackageNotFoundError:
-        pkg_version = "unknown"
-
-    db = make_url(settings.db_url).database or settings.db_url
-    home = os.path.expanduser("~")
-    db_path = "~" + db[len(home) :] if db.startswith(home) else db
+    pkg_version = _banner_version()
+    db_path = _banner_db_path(settings.db_url)
 
     url = f"http://{_BIND_HOST}:{port}"
     base_url: dict[Provider, str] = {

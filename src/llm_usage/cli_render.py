@@ -410,6 +410,50 @@ _WATCHDOG: Final[tuple[str, ...]] = (
 _WATCHDOG_W: Final[int] = 20
 
 
+def _dog_rows(side_lines: list[str], color_enabled: bool) -> list[str]:
+    """Lay the watch-pom out with `side_lines` to its right.
+
+    The dog occupies its own rows; any side line past the dog's height is
+    left-padded so it still aligns under the panel. Shared by the proxy
+    and MCP banners.
+    """
+    rows = max(len(_WATCHDOG), len(side_lines))
+    out: list[str] = []
+    for i in range(rows):
+        art = _WATCHDOG[i] if i < len(_WATCHDOG) else ""
+        side = side_lines[i] if i < len(side_lines) else ""
+        out.append("  " + _style(art.ljust(_WATCHDOG_W), color_enabled, fg=_PEACH) + side)
+    return out
+
+
+def _banner_title(name: str, version: str, color_enabled: bool) -> list[str]:
+    """The shared 'name + version / tagline' header rows beside the dog."""
+    return [
+        "",
+        _style(f"{name}  v{version}", color_enabled, fg=_MINT, bold=True),
+        _style("your LLM spend watchdog", color_enabled, dim=True),
+        "",
+    ]
+
+
+def format_mcp_banner(*, version: str, db_path: str, color_enabled: bool) -> str:
+    """Render the `llm-usage-mcp` startup banner.
+
+    The MCP server talks JSON-RPC over **stdout**, so the caller must
+    print this to **stderr**. Shows transport + DB path — there's no
+    listening URL or client base URLs (those are proxy concepts).
+    """
+    side = [
+        *_banner_title("llm-usage-mcp", version, color_enabled),
+        _style("transport", color_enabled, dim=True) + "   stdio (MCP)",
+        _style("database", color_enabled, dim=True) + f"    {db_path}",
+    ]
+    lines = _dog_rows(side, color_enabled)
+    lines.append("")
+    lines.append("  " + _style("ready - ask your agent about your spend", color_enabled, dim=True))
+    return "\n".join(lines)
+
+
 def format_proxy_banner(
     *,
     version: str,
@@ -427,21 +471,15 @@ def format_proxy_banner(
     the other renderers in this module.
     """
     url = f"http://{host}:{port}"
-    right = [
-        "",
-        _style(f"llm-usage-proxy  v{version}", color_enabled, fg=_MINT, bold=True),
-        _style("your LLM spend watchdog", color_enabled, dim=True),
-        "",
+    side = [
+        *_banner_title("llm-usage-proxy", version, color_enabled),
         _style("listening", color_enabled, dim=True)
         + f"   {url}   "
         + _style("(loopback only)", color_enabled, dim=True),
         _style("database", color_enabled, dim=True) + f"    {db_path}",
     ]
 
-    lines: list[str] = []
-    for i, right_text in enumerate(right):
-        art = _WATCHDOG[i] if i < len(_WATCHDOG) else ""
-        lines.append("  " + _style(art.ljust(_WATCHDOG_W), color_enabled, fg=_PEACH) + right_text)
+    lines = _dog_rows(side, color_enabled)
 
     name_w = max((len(name) for name, _, _ in providers), default=8)
     lines.append("")
