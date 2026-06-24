@@ -25,12 +25,16 @@ import json
 import os
 import sys
 import time
+from dataclasses import dataclass
 from enum import StrEnum
+from importlib import metadata
+from typing import Final
 
 import typer
 
 from llm_usage.capture.proxy import run_proxy
 from llm_usage.cli_render import (
+    format_about,
     format_compare_result,
     format_pricing_catalog,
     format_providers,
@@ -73,14 +77,93 @@ def _version_callback(value: bool) -> None:
     """
     if not value:
         return
-    from importlib import metadata
-
     try:
         version = metadata.version("llm-usage-mcp")
     except metadata.PackageNotFoundError:
         version = "unknown"
     typer.echo(f"llm-usage {version}")
     raise typer.Exit()
+
+
+# Fallbacks for the `about` panel when the package metadata is unavailable
+# (an editable checkout that hasn't been `uv sync`'d, say) or is missing a
+# field. The homepage mirrors `[project.urls].Homepage` in pyproject.toml;
+# keep the two in sync if the repo ever moves.
+_ABOUT_HOMEPAGE_FALLBACK: Final[str] = "https://github.com/zhaoyue722/llm-usage-mcp"
+_ABOUT_AUTHOR_FALLBACK: Final[str] = "Y.Zhao"
+_ABOUT_LICENSE_FALLBACK: Final[str] = "MIT"
+
+
+@dataclass(frozen=True)
+class AboutInfo:
+    """The four fields the `about` panel shows, resolved from metadata."""
+
+    version: str
+    author: str
+    license: str
+    homepage: str
+
+
+def _read_about() -> AboutInfo:
+    """Resolve the about fields from installed package metadata.
+
+    Falls back to compile-time constants when the package isn't
+    installed (so `about` still prints something useful from a raw
+    checkout) and parses the rest field-by-field with per-field
+    fallbacks via `_parse_about`.
+    """
+    try:
+        md = metadata.metadata("llm-usage-mcp")
+    except metadata.PackageNotFoundError:
+        return AboutInfo(
+            version="unknown",
+            author=_ABOUT_AUTHOR_FALLBACK,
+            license=_ABOUT_LICENSE_FALLBACK,
+            homepage=_ABOUT_HOMEPAGE_FALLBACK,
+        )
+    return _parse_about(md)
+
+
+def _parse_about(md: metadata.PackageMetadata) -> AboutInfo:
+    """Pull version / author / license / homepage out of core metadata.
+
+    Split from `_read_about` so the parsing is unit-testable against a
+    synthetic `email.message.Message` without needing the package
+    actually installed. Each field falls back to a constant rather than
+    rendering a blank cell.
+    """
+    version = md.get("Version") or "unknown"
+
+    # `authors = [{name, email}]` serializes to a single `Author-email`
+    # header like `Y.Zhao <zhaoyue722@gmail.com>`; strip the address so
+    # the panel shows just the name. Plain `Author` is the older form.
+    author_raw = md.get("Author-email") or md.get("Author") or ""
+    author = author_raw.split("<", 1)[0].strip().rstrip(",") or _ABOUT_AUTHOR_FALLBACK
+
+    # PEP 639 `license = "MIT"` lands as `License-Expression`; the
+    # classic free-text `License` header is the fallback.
+    license_name = md.get("License-Expression") or md.get("License") or _ABOUT_LICENSE_FALLBACK
+
+    return AboutInfo(
+        version=version,
+        author=author,
+        license=license_name,
+        homepage=_extract_homepage(md),
+    )
+
+
+def _extract_homepage(md: metadata.PackageMetadata) -> str:
+    """First `Project-URL` whose label is 'Homepage', else the fallback.
+
+    `[project.urls]` serializes as repeated `Project-URL: Label, https://…`
+    headers; we match the Homepage label case-insensitively and fall back
+    to the constant when none is present.
+    """
+    for entry in md.get_all("Project-URL") or []:
+        label, _, url = str(entry).partition(",")
+        if label.strip().lower() == "homepage":
+            return url.strip()
+    return _ABOUT_HOMEPAGE_FALLBACK
 
 
 @app.callback()
@@ -702,6 +785,56 @@ def providers(
     )
 
 
+@app.command()
+def about(
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit version / author / license / homepage as JSON instead of the panel.",
+    ),
+    color: ColorMode = typer.Option(
+        ColorMode.auto,
+        "--color",
+        help="auto = color on TTY only (respects NO_COLOR); always = force on; never = force off.",
+    ),
+) -> None:
+    """Show version, author, license, and the project homepage.
+
+    The human-facing companion to `--version`: a small watch-pom panel
+    for "what is this and where do I file an issue." Fields come from
+    the installed package metadata (`pyproject.toml`), so they stay in
+    lockstep with what PyPI shows; a raw, un-synced checkout falls back
+    to built-in defaults rather than printing blanks.
+    """
+    info = _read_about()
+
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "version": info.version,
+                    "author": info.author,
+                    "license": info.license,
+                    "homepage": info.homepage,
+                },
+                indent=2,
+            )
+        )
+        return
+
+    color_enabled = _resolve_color(color)
+    typer.echo(
+        format_about(
+            version=info.version,
+            author=info.author,
+            license_name=info.license,
+            homepage=info.homepage,
+            color_enabled=color_enabled,
+        ),
+        color=color_enabled,
+    )
+
+
 def _resolve_color(mode: ColorMode) -> bool:
     """Decide whether to emit ANSI escapes for human-readable output.
 
@@ -743,6 +876,7 @@ def proxy_main() -> None:
 
 
 __all__ = [
+    "about",
     "app",
     "compare",
     "main",

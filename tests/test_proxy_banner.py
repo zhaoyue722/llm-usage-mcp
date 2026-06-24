@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from llm_usage.cli_render import format_mcp_banner, format_proxy_banner
+from llm_usage.cli_render import format_about, format_mcp_banner, format_proxy_banner
 
 _PROVIDERS = [
     ("anthropic", True, "http://127.0.0.1:5525"),
@@ -84,3 +84,27 @@ def test_mcp_banner_omits_proxy_only_fields() -> None:
 def test_mcp_banner_color_toggles_ansi() -> None:
     assert "\x1b[" not in _mcp(color_enabled=False)
     assert "\x1b[" in _mcp(color_enabled=True)
+
+
+def _about(color_enabled: bool = False) -> str:
+    return format_about(
+        version="0.1.0",
+        author="Y.Zhao",
+        license_name="MIT",
+        homepage="https://github.com/zhaoyue722/llm-usage-mcp",
+        color_enabled=color_enabled,
+    )
+
+
+def test_about_banner_has_dog_title_and_fields() -> None:
+    out = _about()
+    assert "o-''" in out  # same watch-pom as the other banners
+    assert "llm-usage  v0.1.0" in out
+    assert "Y.Zhao" in out
+    assert "MIT" in out
+    assert "https://github.com/zhaoyue722/llm-usage-mcp" in out
+
+
+def test_about_banner_color_toggles_ansi() -> None:
+    assert "\x1b[" not in _about(color_enabled=False)
+    assert "\x1b[" in _about(color_enabled=True)

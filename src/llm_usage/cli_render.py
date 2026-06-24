@@ -506,6 +506,43 @@ def format_proxy_banner(
     return "\n".join(lines)
 
 
+# --- about banner ----------------------------------------------------------
+
+# Label column width for the about panel. The longest label ("homepage" = 8)
+# plus a two-space gutter, so values line up under each other regardless of
+# the label that precedes them.
+_ABOUT_LABEL_W: Final[int] = 10
+
+
+def format_about(
+    *,
+    version: str,
+    author: str,
+    license_name: str,
+    homepage: str,
+    color_enabled: bool,
+) -> str:
+    """Render the `llm-usage about` panel — version, author, license, homepage.
+
+    Reuses the watch-pom + title header the proxy and MCP banners use, so
+    the three "front door" surfaces look like one family. Pure function:
+    the caller resolves `color_enabled`, same contract as every other
+    renderer here.
+    """
+    side = [
+        *_banner_title("llm-usage", version, color_enabled),
+        _style("author".ljust(_ABOUT_LABEL_W), color_enabled, dim=True) + author,
+        _style("license".ljust(_ABOUT_LABEL_W), color_enabled, dim=True) + license_name,
+        _style("homepage".ljust(_ABOUT_LABEL_W), color_enabled, dim=True) + homepage,
+    ]
+    lines = _dog_rows(side, color_enabled)
+    lines.append("")
+    lines.append(
+        "  " + _style("local-first - your spend never leaves this machine", color_enabled, dim=True)
+    )
+    return "\n".join(lines)
+
+
 # --- spend renderers -------------------------------------------------------
 
 # How many top-N rows usage_summary returns per axis (providers, models). The

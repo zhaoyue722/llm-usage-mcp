@@ -3,6 +3,8 @@ name = "llm-usage-mcp"
 version = "0.1.0"
 description = "Local-first, multi-provider tool that captures LLM API spend and exposes it to coding agents via MCP"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Y.Zhao", email = "zhaoyue722@gmail.com" }
 ]
@@ -18,6 +20,11 @@ dependencies = [
     "typer>=0.15",
     "uvicorn[standard]>=0.32",
 ]
+
+[project.urls]
+Homepage = "https://github.com/zhaoyue722/llm-usage-mcp"
+Repository = "https://github.com/zhaoyue722/llm-usage-mcp"
+Issues = "https://github.com/zhaoyue722/llm-usage-mcp/issues"
 
 [project.scripts]
 # Multi-command CLI: `llm-usage proxy`, `llm-usage compare`, ...
