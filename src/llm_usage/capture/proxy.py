@@ -40,7 +40,7 @@ from llm_usage.capture.openai_compatible import (
 from llm_usage.capture.openai_compatible import (
     build_router as build_openai_compatible_router,
 )
-from llm_usage.config import Settings, get_settings
+from llm_usage.config import Provider, Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,8 @@ def run_proxy(*, port: int | None = None, log_level: str | None = None) -> None:
     bind_port = port if port is not None else settings.proxy_port
     bind_log_level = (log_level if log_level is not None else settings.log_level).lower()
 
+    print(_build_startup_banner(settings, bind_port))
+
     logger.info(
         "starting capture proxy on http://%s:%d "
         "(anthropic streaming + non-streaming; openai / deepseek / qwen non-streaming)",
@@ -152,6 +154,66 @@ def run_proxy(*, port: int | None = None, log_level: str | None = None) -> None:
         host=_BIND_HOST,
         port=bind_port,
         log_level=bind_log_level,
+    )
+
+
+def _banner_version() -> str:
+    """Installed package version, or 'unknown' from a non-installed tree."""
+    from importlib import metadata
+
+    try:
+        return metadata.version("llm-usage-mcp")
+    except metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def _banner_db_path(db_url: str) -> str:
+    """The on-disk DB path for display, with `$HOME` abbreviated to `~`."""
+    import os
+
+    from sqlalchemy.engine.url import make_url
+
+    db = make_url(db_url).database or db_url
+    home = os.path.expanduser("~")
+    return "~" + db[len(home) :] if db.startswith(home) else db
+
+
+def _build_startup_banner(settings: Settings, port: int) -> str:
+    """Assemble banner data and render the watch-pom + info panel.
+
+    Resolves the package version, the on-disk DB path, and each provider's
+    key state + client base URL, then defers the actual layout to
+    `cli_render.format_proxy_banner`. Color follows the same `NO_COLOR` /
+    TTY rules as the CLI.
+    """
+    import os
+    import sys
+
+    from llm_usage.cli_render import format_proxy_banner
+
+    pkg_version = _banner_version()
+    db_path = _banner_db_path(settings.db_url)
+
+    url = f"http://{_BIND_HOST}:{port}"
+    base_url: dict[Provider, str] = {
+        "anthropic": url,
+        "openai": f"{url}/openai/v1",
+        "deepseek": f"{url}/deepseek/v1",
+        "qwen": f"{url}/qwen/v1",
+    }
+    order: tuple[Provider, ...] = ("anthropic", "openai", "deepseek", "qwen")
+    providers: list[tuple[str, bool, str]] = [
+        (p, settings.api_key_for(p) is not None, base_url[p]) for p in order
+    ]
+
+    color_enabled = not os.environ.get("NO_COLOR") and sys.stdout.isatty()
+    return format_proxy_banner(
+        version=pkg_version,
+        host=_BIND_HOST,
+        port=port,
+        db_path=db_path,
+        providers=providers,
+        color_enabled=color_enabled,
     )
 
 

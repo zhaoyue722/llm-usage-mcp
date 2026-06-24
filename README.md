@@ -1,3 +1,9 @@
+<!-- Brand logo. Save your watch-pom mark to docs/assets/watch-pom.png and uncomment:
+<p align="center">
+  <img src="docs/assets/watch-pom.png" alt="llm-usage-mcp watch-pom" width="160">
+</p>
+-->
+
 # llm-usage-mcp
 
 > English | [中文](README.zh.md)
