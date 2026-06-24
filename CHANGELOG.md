@@ -6,7 +6,7 @@ All notable changes to `llm-usage-mcp` are recorded here. The format follows [Ke
 
 Nothing yet.
 
-## [0.1.0] — 2026-06-17
+## [0.1.0] — 2026-06-24
 
 The initial public release: local-first MCP server that captures LLM API spend across Anthropic, OpenAI, DeepSeek, and Qwen, and exposes spend / pricing / recommendation queries as MCP tools.
 
@@ -50,6 +50,14 @@ The initial public release: local-first MCP server that captures LLM API spend a
 - `include_failed: bool = False` on `query_spend` and `usage_summary` — partial-stream rows (`success=False`) are excluded from totals, per-group rollups, top-N rankings, and the largest-call lookup unless explicitly opted in.
 - ISO-8601 window parsing accepts trailing-`Z`, explicit offsets, and naive strings (interpreted as UTC) so results don't depend on where the server runs.
 
+#### Layer 4 — CLI
+
+- `llm-usage` multi-command CLI (Typer) with eight subcommands: `proxy`, `compare`, `models`, `recommend`, `spend`, `status`, `providers`, `about`. Each read command mirrors the matching MCP tool and shares the same `core/` layer, so the CLI and MCP stay in lockstep on ranking / aggregation semantics.
+- Human-readable tables with a warm low-contrast palette (TTY- and `NO_COLOR`-aware) plus `--json` on every command, emitting the same Pydantic shapes the MCP tools return — pipe straight into `jq`.
+- `--version` / `-V`, shell completion (`--install-completion {bash|zsh|fish|powershell}`), and `about` (version / author / license / homepage, read from installed package metadata).
+- Three console scripts: `llm-usage`, `llm-usage-mcp`, and `llm-usage-proxy` (a back-compat alias for `llm-usage proxy`).
+- "watch-pom" startup banner for the proxy (and, on a TTY, the MCP server).
+
 #### Bootstrap / configuration
 
 - `bootstrap()` runs `alembic upgrade head` programmatically and **re-materializes pricing on every boot** (idempotent upsert), so edits to `pricing_overrides.json` reach `pricing_snapshot` on the next restart.
@@ -59,13 +67,14 @@ The initial public release: local-first MCP server that captures LLM API spend a
 
 #### CI / infrastructure
 
-- GitHub Actions CI workflow ([`ci.yml`](.github/workflows/ci.yml)) runs `ruff check`, `ruff format --check`, `mypy --strict`, and `pytest --cov --cov-fail-under=80` on every PR and push to main. Currently **392 tests passing, ~93% project-wide coverage**.
+- GitHub Actions CI workflow ([`ci.yml`](.github/workflows/ci.yml)) runs `ruff check`, `ruff format --check`, `mypy --strict`, and `pytest --cov --cov-fail-under=80` on every PR and push to main. Currently **731 tests passing**, project-wide coverage well above the 80% gate.
 - Weekly pricing-refresh workflow ([`refresh-pricing.yml`](.github/workflows/refresh-pricing.yml)) — pulls the latest LiteLLM pricing JSON, re-trims to v1 providers, opens a PR if anything changed.
 - MIT [LICENSE](LICENSE) and [CLAUDE.md](CLAUDE.md) for the project's own agent context (eating our own dog food).
+- PyPI packaging metadata: SPDX `license = "MIT"`, bundled license file, and `[project.urls]` (Homepage / Repository / Issues) so the package page links back to the repo.
 
 #### Documentation
 
-- English [README.md](README.md) with two-minute quickstart, MCP tool table, architecture sketch, provider matrix, configuration reference.
+- English [README.md](README.md) with logo lockup, two-minute quickstart, MCP tool table, full CLI reference, provider matrix, and configuration reference.
 - Chinese [README.zh.md](README.zh.md) localized for readers in mainland China — leads with DeepSeek / Qwen, flags network-access considerations for Anthropic / OpenAI, notes the `pricing_overrides.json` escape hatch.
 - [`docs/spec.md`](docs/spec.md) — the contract this release implements.
 - [`docs/architecture.md`](docs/architecture.md) — three-layer breakdown and streaming-capture semantics (including partial-count rules for failed streams).
@@ -79,7 +88,6 @@ The initial public release: local-first MCP server that captures LLM API spend a
 - **`recommend_provider` is cost-only.** The original spec accepted a `quality_priority` axis backed by a `quality_snapshot` table. The table is created by migration but kept empty in v1 — the only quality data we had was hand-authored editorial estimates, which would have been dishonest. A post-v1 release wires a real leaderboard importer; the surface returns the `quality_priority` parameter at that point.
 - **`task_description` doesn't drive selection.** `recommend_provider` echoes it into the `reasoning` string but doesn't interpret it — the tool isn't an LLM.
 - **`compare_providers.notes` is always `None`.** Field is reserved for future per-row caveats.
-- **CLI surface is minimal.** `llm-usage-proxy` is the only console script today. A `spend` / `tail` / `status` subcommand set is planned for a follow-up.
 - **Bedrock pricing is not region-aware.** The `pricing_snapshot` schema doesn't carry a region column. Out of v1 scope; revisit when Bedrock support lands.
 
 [Unreleased]: https://github.com/zhaoyue722/llm-usage-mcp/compare/v0.1.0...HEAD
