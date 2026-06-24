@@ -128,7 +128,7 @@ Claude picks the right tool and reads the numbers back. Seven tools are exposed 
 
 ### From the command line (CLI)
 
-The same questions, as a CLI — seven subcommands under one `llm-usage` console, for when typing is faster than asking your agent.
+The same questions, as a CLI — eight subcommands under one `llm-usage` console, for when typing is faster than asking your agent.
 
 > The examples below assume `llm-usage` is on your `PATH` — either `source .venv/bin/activate` or `uv tool install .`. Otherwise, prefix each command with `uv run` (e.g. `uv run llm-usage spend`).
 
@@ -144,6 +144,7 @@ $ llm-usage
    spend      Show recorded spend over a calendar period.
    status     Snapshot of the local install: DB, proxy, providers, pricing.
    providers  List configured providers with key state, wire-format, model count.
+   about      Show version, author, license, and the project homepage.
 ```
 
 | Command | The question it answers |
@@ -154,6 +155,7 @@ $ llm-usage
 | [`spend`](#spend) | How much did I just spend? |
 | [`status`](#status) | Is everything actually working? |
 | [`providers`](#providers) | What's configured locally? |
+| [`about`](#about) | What is this, and where do I report a bug? |
 | `proxy` | Run the capture proxy (same as `llm-usage-proxy`). |
 
 Conventions that hold across every command:
@@ -252,6 +254,17 @@ Per-provider configuration view. Wider than the `status` Providers block: adds t
 ```bash
 $ llm-usage providers
 $ llm-usage providers --models   # expand each provider with its model list
+```
+
+#### `about`
+
+The front-door panel: version, author, license, and the project homepage, next to the watch-pom. The human-facing companion to `--version` — fields are read from the installed package metadata, so they match what PyPI shows.
+
+```bash
+$ llm-usage about
+
+# Machine-readable, for a script or an issue template:
+$ llm-usage about --json
 ```
 
 ## Supported providers

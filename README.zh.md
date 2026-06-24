@@ -152,7 +152,7 @@ claude mcp add llm-usage -- uv --directory $(pwd) run llm-usage-mcp
 
 ### 用命令行查（CLI）
 
-同样这些问题，换成命令行——七个子命令，全塞在一个 `llm-usage` 命令底下。有时候自己敲一行，比开口问 Agent 还快。
+同样这些问题，换成命令行——八个子命令，全塞在一个 `llm-usage` 命令底下。有时候自己敲一行，比开口问 Agent 还快。
 
 > 下面的示例都假设 `llm-usage` 已经在你的 `PATH` 上——要么 `source .venv/bin/activate`，要么 `uv tool install .`。否则每条命令前面都得加 `uv run`（比如 `uv run llm-usage spend`）。
 
@@ -168,6 +168,7 @@ $ llm-usage
    spend      按自然时段看已记录的花费。
    status     本地安装的体检表：数据库、代理、厂商、定价。
    providers  列出已配置的厂商：key 状态、协议格式、模型数。
+   about      显示版本、作者、许可证和项目主页。
 ```
 
 | 命令 | 回答的问题 |
@@ -178,6 +179,7 @@ $ llm-usage
 | [`spend`](#spend) | 我刚才花了多少？ |
 | [`status`](#status) | 这套东西到底接上了没有？ |
 | [`providers`](#providers) | 本地都配了哪些厂商？ |
+| [`about`](#about) | 这是个啥，出了 bug 上哪报？ |
 | `proxy` | 启动抓取代理（同 `llm-usage-proxy`）。 |
 
 几条所有命令通用的约定：
@@ -276,6 +278,17 @@ $ llm-usage status --json
 ```bash
 $ llm-usage providers
 $ llm-usage providers --models   # 把每家厂商连同它的模型清单一起展开
+```
+
+#### `about`
+
+门面那一屏：版本、作者、许可证、项目主页，旁边蹲着看门的博美。算是 `--version` 的人性化版本——这些信息直接读自已安装的包元数据，所以和 PyPI 上显示的一致。
+
+```bash
+$ llm-usage about
+
+# 机器可读，方便塞进脚本或 issue 模板：
+$ llm-usage about --json
 ```
 
 ## 支持的厂商
