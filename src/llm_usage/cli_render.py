@@ -396,6 +396,78 @@ def _style(text: str, color_enabled: bool, *, dim: bool = False, **kwargs: objec
     return click.style(text, dim=dim, **kwargs)  # type: ignore[arg-type]
 
 
+# --- proxy startup banner --------------------------------------------------
+
+# The watch-pom. Pure ASCII (no emoji, per project convention), kept small
+# so the informative panel beside it still leads.
+_WATCHDOG: Final[tuple[str, ...]] = (
+    "       __",
+    "   o-''|\\_____/)",
+    "    \\_/|_)     )",
+    "       \\  __  /",
+    "       (_/ (_/",
+)
+_WATCHDOG_W: Final[int] = 20
+
+
+def format_proxy_banner(
+    *,
+    version: str,
+    host: str,
+    port: int,
+    db_path: str,
+    providers: list[tuple[str, bool, str]],
+    color_enabled: bool,
+) -> str:
+    """Render the `llm-usage-proxy` startup banner.
+
+    The watch-pom next to a panel of where it's listening, the DB path,
+    and per-provider key state + the client base URL to point at each.
+    Pure function — the caller decides `color_enabled`, same contract as
+    the other renderers in this module.
+    """
+    url = f"http://{host}:{port}"
+    right = [
+        "",
+        _style(f"llm-usage-proxy  v{version}", color_enabled, fg=_MINT, bold=True),
+        _style("your LLM spend watchdog", color_enabled, dim=True),
+        "",
+        _style("listening", color_enabled, dim=True)
+        + f"   {url}   "
+        + _style("(loopback only)", color_enabled, dim=True),
+        _style("database", color_enabled, dim=True) + f"    {db_path}",
+    ]
+
+    lines: list[str] = []
+    for i, right_text in enumerate(right):
+        art = _WATCHDOG[i] if i < len(_WATCHDOG) else ""
+        lines.append("  " + _style(art.ljust(_WATCHDOG_W), color_enabled, fg=_PEACH) + right_text)
+
+    name_w = max((len(name) for name, _, _ in providers), default=8)
+    lines.append("")
+    lines.append(
+        "    "
+        + _style(
+            f"{'provider'.ljust(name_w)}  {'key'.ljust(6)}  point your client's base URL here",
+            color_enabled,
+            dim=True,
+        )
+    )
+    for name, has_key, base in providers:
+        key_cell = (
+            _style("ready".ljust(6), color_enabled, fg=_MINT)
+            if has_key
+            else _style("no key".ljust(6), color_enabled, fg=_SOFT_YELLOW)
+        )
+        lines.append(
+            f"    {name.ljust(name_w)}  {key_cell}  " + _style(base, color_enabled, dim=True)
+        )
+
+    lines.append("")
+    lines.append("  " + _style("watching every call - Ctrl-C to stop", color_enabled, dim=True))
+    return "\n".join(lines)
+
+
 # --- spend renderers -------------------------------------------------------
 
 # How many top-N rows usage_summary returns per axis (providers, models). The
