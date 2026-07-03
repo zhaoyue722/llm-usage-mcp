@@ -18,6 +18,10 @@
 
 ![Claude Code 通过 llm-usage 回答「我花了多少钱？」](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/agent-spend-cn.png)
 
+也可以直接在终端里看——本周花销按厂商拆开，外加一份选型前的跨厂商成本对比：
+
+![llm-usage 命令行：按厂商统计本周花销，以及跨厂商成本对比](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/demo.gif)
+
 ## 为什么你需要这个工具
 
 现在做开发，手里多半同时开着好几家大模型：写代码少不了 Claude，日常离不开 GPT，国内直连还得靠 DeepSeek 和通义千问。钱花得悄无声息，可你想回头算笔账却比写代码还头疼：每家一个控制台，计价货币还不统一（有的算美元、有的算人民币），更别提那些千奇百怪的“上下文缓存命中折扣”，四家有四套不同的深夜高数算法。

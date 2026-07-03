@@ -2,6 +2,8 @@
 progress.md
 progress.en.md
 progress.cn.md
+progress.simple.en.md
+progress.simple.cn.md
 
 # Local-only detailed action plan (kept on disk, never pushed)
 docs/detailed_plan.md

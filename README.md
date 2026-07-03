@@ -18,6 +18,10 @@ Stop treating your LLM API bills like a scary horror movie you only look at thro
 
 ![Claude Code answering "how much did I spend?" via llm-usage](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/agent-spend.png)
 
+Or straight from the terminal — your week's spend, broken down by provider, and a cross-provider cost comparison before you commit to a model:
+
+![llm-usage CLI: weekly spend by provider and a cross-provider cost comparison](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/demo.gif)
+
 ## Why you'd want this
 
 You're calling LLMs from a handful of providers — Claude, GPT, plus Chinese models like Qwen and DeepSeek. Each one bills in its own dashboard, in its own currency, with its own rules for what a "cached token" costs. So the simplest possible question — *how much am I spending, and on what?* — turns into four browser logins, looking up exchange rates for RMB to USD, and trying to decipher what a "cached context token discount" actually means in midnight math. Most people just cross their fingers and let the bill be a surprise at the end of the month.
