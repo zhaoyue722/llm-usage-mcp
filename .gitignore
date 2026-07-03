@@ -244,3 +244,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# recording
+docs/demo.tape
+scripts/seed_demo.py
