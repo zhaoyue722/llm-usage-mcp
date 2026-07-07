@@ -14,11 +14,11 @@
 
 <p align="center"><a href="https://github.com/zhaoyue722/llm-usage-mcp/blob/main/README.md">English</a> | 中文</p>
 
-别再把每月的大模型 API 账单当恐怖片看了——就是那种捂着眼睛、只敢漏出一条指缝看余额的恐怖片。这个工具帮你把账算得明明白白，全程本地，不上云，不当冤大头。查账的时候，既能让编码 Agent 替你开口问（[MCP](https://modelcontextprotocol.io)），也能自己敲命令行（CLI）。
+别再把每月的大模型 API 账单当恐怖片看了——就是那种捂着眼睛、只敢漏出一条指缝看余额的恐怖片。这个工具帮你把账算得明明白白，全程本地，不上云。查账的时候，既能让编码 Agent 替你开口问（[MCP](https://modelcontextprotocol.io)），也能自己敲命令行（CLI）。
 
 ![Claude Code 通过 llm-usage 回答「我花了多少钱？」](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/agent-spend-cn.png)
 
-也可以直接在终端里看——本周花销按厂商拆开，外加一份选型前的跨厂商成本对比：
+也可以直接在终端里看——本周按照厂商分开的花销，外加一份选型前的跨厂商成本对比：
 
 ![llm-usage 命令行：按厂商统计本周花销，以及跨厂商成本对比](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/demo.gif)
 
