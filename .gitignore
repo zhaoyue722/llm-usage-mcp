@@ -249,3 +249,13 @@ __marimo__/
 # recording
 docs/demo.tape
 scripts/seed_demo.py
+
+# Local-only demo video / gif generation (build scripts + working files; never pushed)
+docs/video/
+scripts/add_voiceover.sh
+scripts/build_video.sh
+scripts/demo_agent.py
+scripts/video_assets.py
+
+# macOS
+.DS_Store

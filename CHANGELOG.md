@@ -6,6 +6,13 @@ All notable changes to `llm-usage-mcp` are recorded here. The format follows [Ke
 
 Nothing yet.
 
+## [0.1.2] — 2026-07-07
+
+### Added
+
+- `server.json` (Official MCP Registry manifest) at the repo root — declares the PyPI package (`llm-usage-mcp`, `uvx` runtime, stdio transport) under the `io.github.zhaoyue722/llm-usage-mcp` namespace, so the server can be published to and discovered through `registry.modelcontextprotocol.io`.
+- `mcp-name` ownership marker in `README.md` (HTML comment) — carried into the published package's `PKG-INFO`, which the registry validates to confirm the server entry owns the PyPI package.
+
 ## [0.1.1] — 2026-06-24
 
 ### Fixed
@@ -96,6 +103,7 @@ The initial public release: local-first MCP server that captures LLM API spend a
 - **`compare_providers.notes` is always `None`.** Field is reserved for future per-row caveats.
 - **Bedrock pricing is not region-aware.** The `pricing_snapshot` schema doesn't carry a region column. Out of v1 scope; revisit when Bedrock support lands.
 
-[Unreleased]: https://github.com/zhaoyue722/llm-usage-mcp/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/zhaoyue722/llm-usage-mcp/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/zhaoyue722/llm-usage-mcp/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/zhaoyue722/llm-usage-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/zhaoyue722/llm-usage-mcp/releases/tag/v0.1.0

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.zhaoyue722/llm-usage-mcp",
+  "title": "LLM Usage",
+  "description": "Local-first, multi-provider tool that captures LLM API spend and exposes it to coding agents via MCP",
+  "version": "0.1.2",
+  "websiteUrl": "https://github.com/zhaoyue722/llm-usage-mcp",
+  "repository": {
+    "url": "https://github.com/zhaoyue722/llm-usage-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "llm-usage-mcp",
+      "version": "0.1.2",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

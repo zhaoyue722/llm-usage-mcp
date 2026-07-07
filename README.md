@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.zhaoyue722/llm-usage-mcp -->
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/watch-pom.png" alt="llm-usage-mcp" width="140">
 </p>
