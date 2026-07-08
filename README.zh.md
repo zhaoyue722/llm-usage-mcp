@@ -10,6 +10,7 @@
   <a href="https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml"><img src="https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/zhaoyue722/llm-usage-mcp/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.13%2B-blue.svg" alt="Python 3.13+"></a>
+  <a href="https://glama.ai/mcp/servers/zhaoyue722/llm-usage-mcp"><img src="https://glama.ai/mcp/servers/zhaoyue722/llm-usage-mcp/badges/score.svg" alt="Glama score"></a>
 </p>
 
 <p align="center"><a href="https://github.com/zhaoyue722/llm-usage-mcp/blob/main/README.md">English</a> | 中文</p>
