@@ -308,6 +308,10 @@ Everything is env vars (or a `.env` file at the repo root). Defaults are sane �
 | `LLM_USAGE_PROXY_PORT` | `5525` | Capture proxy port (loopback only). |
 | `LLM_USAGE_<PROVIDER>_BASE_URL` | each provider's official endpoint | Point a provider at a reverse proxy / gateway — handy in network-restricted regions. |
 
+## Docker
+
+A minimal [`Dockerfile`](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/Dockerfile) is included **only** for automated MCP registry validation (e.g. Glama), which verifies that the packaged server boots and responds to MCP introspection. The recommended way to run the server is still `uvx llm-usage-mcp` locally — this is a local-first tool, not a hosted service.
+
 ## License
 
 [MIT](https://github.com/zhaoyue722/llm-usage-mcp/blob/main/LICENSE).
