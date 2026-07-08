@@ -6,7 +6,7 @@
 
 <h1 align="center">llm-usage-mcp</h1>
 
-<p align="center"><em>your LLM spend watchdog</em></p>
+<p align="center"><em>LLM Usage &amp; Cost Tracker — your local-first spend watchdog</em></p>
 
 <p align="center">
   <a href="https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml"><img src="https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -18,6 +18,8 @@
 <p align="center">English | <a href="https://github.com/zhaoyue722/llm-usage-mcp/blob/main/README.zh.md">中文</a></p>
 
 Stop treating your LLM API bills like a scary horror movie you only look at through your fingers at the end of the month. Know what your LLM calls actually cost — across every provider, in one place, on your own machine. Ask your coding agent (MCP) or type a command (CLI).
+
+It's a cost **meter**, not a router: it tells you what you spent and which provider fits a workload — it never changes your calls. Pairs happily alongside a router or a model-leaderboard tool.
 
 ![Claude Code answering "how much did I spend?" via llm-usage](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/agent-spend.png)
 

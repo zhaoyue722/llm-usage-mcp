@@ -4,7 +4,7 @@
 
 <h1 align="center">llm-usage-mcp</h1>
 
-<p align="center"><em>your LLM spend watchdog</em></p>
+<p align="center"><em>LLM 用量与成本追踪器 —— 本地优先的账单看门狗</em></p>
 
 <p align="center">
   <a href="https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml"><img src="https://github.com/zhaoyue722/llm-usage-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -16,6 +16,8 @@
 <p align="center"><a href="https://github.com/zhaoyue722/llm-usage-mcp/blob/main/README.md">English</a> | 中文</p>
 
 别再把每月的大模型 API 账单当恐怖片看了——就是那种捂着眼睛、只敢漏出一条指缝看余额的恐怖片。这个工具帮你把账算得明明白白，全程本地，不上云。查账的时候，既能让编码 Agent 替你开口问（[MCP](https://modelcontextprotocol.io)），也能自己敲命令行（CLI）。
+
+它是一把成本**计量尺**，而不是路由器：只告诉你花了多少、哪家更适合某类任务，绝不替你改动任何一次调用。和路由工具或模型榜单类工具搭配使用也毫无冲突。
 
 ![Claude Code 通过 llm-usage 回答「我花了多少钱？」](https://raw.githubusercontent.com/zhaoyue722/llm-usage-mcp/main/docs/assets/agent-spend-cn.png)
 
