@@ -11,6 +11,10 @@ docs/detailed_plan.md
 # Local-only status snapshot (kept on disk, never pushed)
 docs/status.md
 
+# Local-only resume / interview prep (personal, never pushed)
+INTERVIEW_PREP.md
+INTERVIEW_PREP.cn.md
+
 # Local-only backlog / planning notes (kept on disk, never pushed)
 docs/backlog.md
 
