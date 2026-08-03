@@ -12,8 +12,7 @@ docs/detailed_plan.md
 docs/status.md
 
 # Local-only resume / interview prep (personal, never pushed)
-INTERVIEW_PREP.md
-INTERVIEW_PREP.cn.md
+INTERVIEW_PREP*.md
 
 # Local-only backlog / planning notes (kept on disk, never pushed)
 docs/backlog.md
@@ -25,6 +24,11 @@ docs/research/
 
 # Local-only one-off review / re-evaluation notes (kept on disk, never pushed)
 docs/re_evaluation_*.md
+
+# MCP Registry publisher binary — downloaded per-platform, not vendored.
+# CI fetches its own copy (pinned in .github/workflows/release.yml); a
+# local one is for manual publishing and must never land in the repo.
+mcp-publisher
 
 # Local-only manual-exercise scripts (real-API dogfooding; uncommitted on purpose)
 scripts/dogfood.sh
