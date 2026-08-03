@@ -6,6 +6,19 @@ All notable changes to `llm-usage-mcp` are recorded here. The format follows [Ke
 
 Nothing yet.
 
+## [0.1.3] — 2026-08-02
+
+### Fixed
+
+- **Fresh installs were broken.** `mcp[cli]` was declared with no upper bound, so a new install resolved to `mcp` 2.x, which removed the `mcp.server.fastmcp` entry point this server is built on. Every console script (`llm-usage`, `llm-usage-mcp`, `llm-usage-proxy`) failed immediately with `ModuleNotFoundError: No module named 'mcp.server.fastmcp'`. The dependency is now bounded `>=1.27.0,<2`. Existing installs and development checkouts were unaffected — `uv.lock` pinned a working version, which is precisely why the repository's own test suite never saw it.
+
+### Added
+
+- Automated release pipeline (`.github/workflows/release.yml`): pushing a `v*` tag runs the full quality gate, builds the wheel, **smoke-tests the built artifact in a clean environment with freshly-resolved dependencies**, then publishes to PyPI and the Official MCP Registry. Both publish steps authenticate via GitHub OIDC — no long-lived API tokens. See [`docs/releasing.md`](docs/releasing.md).
+- `scripts/check_version_consistency.py` — verifies the version agrees across `pyproject.toml` and both `server.json` fields, and matches the release tag. Runs standalone as a pre-flight or as the first gate of the release workflow.
+
+> The smoke-test step is what found the dependency bug above. Both packaging failures this project has shipped (v0.1.0's missing migrations, v0.1.3's unbounded dependency) share one shape: the test suite runs against the source tree and the lockfile, and users get neither.
+
 ## [0.1.2] — 2026-07-07
 
 ### Added
@@ -103,7 +116,8 @@ The initial public release: local-first MCP server that captures LLM API spend a
 - **`compare_providers.notes` is always `None`.** Field is reserved for future per-row caveats.
 - **Bedrock pricing is not region-aware.** The `pricing_snapshot` schema doesn't carry a region column. Out of v1 scope; revisit when Bedrock support lands.
 
-[Unreleased]: https://github.com/zhaoyue722/llm-usage-mcp/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/zhaoyue722/llm-usage-mcp/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/zhaoyue722/llm-usage-mcp/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/zhaoyue722/llm-usage-mcp/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/zhaoyue722/llm-usage-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/zhaoyue722/llm-usage-mcp/releases/tag/v0.1.0
