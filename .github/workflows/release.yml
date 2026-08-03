@@ -1,0 +1,162 @@
+name: Release
+
+# Publishes a tagged version to PyPI and the Official MCP Registry.
+#
+# Triggered by pushing a version tag, so the whole release is:
+#
+#     uv run python scripts/check_version_consistency.py   # optional pre-flight
+#     git tag v0.1.3 && git push --tags
+#
+# Everything below runs from the tagged commit on a clean runner — never
+# from a laptop with an unknown working tree. The ordering matters: PyPI
+# first, registry second, because the registry validates that the PyPI
+# package exists and carries the `mcp-name` ownership marker (it's in
+# README.md, which lands in the wheel's PKG-INFO). Publishing the
+# registry entry first would point at a version nobody can install yet.
+#
+# Neither publish step uses a stored credential. Both authenticate with
+# GitHub's OIDC token, which is minted per-run and expires in minutes —
+# see the `id-token: write` permission below. There is no PyPI API token
+# in repo secrets, and nothing to leak from a developer machine.
+
+on:
+  push:
+    tags: ["v*"]
+  # Manual re-run, for the case where PyPI succeeded and the registry
+  # step failed (or vice versa). Re-running is safe: PyPI rejects a
+  # duplicate version, and the registry upsert is idempotent.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.3)"
+        required: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Required to mint the OIDC token that both PyPI Trusted Publishing
+      # and `mcp-publisher login github-oidc` exchange for short-lived
+      # credentials. This is the entire auth story for this workflow.
+      id-token: write
+      # The job only reads the repository; it doesn't push commits or
+      # create releases. Least privilege, same posture as ci.yml.
+      contents: read
+
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v4
+        with:
+          # `workflow_dispatch` needs the ref spelled out; a tag push
+          # already checks out the right commit, and the fallback is a
+          # no-op in that case.
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install uv + Python 3.13
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Verify the tag matches every version field
+        # The guard. `pyproject.toml` and `server.json` each carry the
+        # version (server.json twice — top level and inside `packages`),
+        # all edited by hand. This fails the release *before* anything is
+        # published if they disagree with each other or with the tag.
+        # Same script a human runs locally before tagging.
+        run: |
+          uv run python scripts/check_version_consistency.py \
+            "${{ github.event.inputs.tag || github.ref_name }}"
+
+      - name: Install dependencies
+        run: uv sync
+
+      # The same four gates ci.yml runs. They almost certainly passed on
+      # this commit already — but "almost certainly" isn't the bar for
+      # something irreversible, and a tag can be pushed to a commit that
+      # never went through a PR. Publishing is one-way: PyPI does not
+      # allow re-uploading a version.
+      - name: Lint (ruff)
+        run: uv run ruff check src/ tests/
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check src/ tests/
+
+      - name: Type check (mypy --strict)
+        run: uv run mypy
+
+      - name: Tests + coverage floor
+        run: uv run pytest --cov --cov-fail-under=80
+
+      - name: Build wheel + sdist
+        run: uv build
+
+      - name: Smoke-test the built wheel
+        # The gate that would have caught both packaging failures this
+        # project has actually shipped. The test suite runs against the
+        # source tree — where files outside the package are still on
+        # disk and uv.lock pins every dependency. The wheel is a
+        # different artifact resolved against live PyPI, and both of
+        # those differences have broken a release:
+        #
+        #   v0.1.0  alembic migrations lived outside the package, so
+        #           they weren't in the wheel and first boot crashed.
+        #   v0.1.2  `mcp[cli]>=1.27.0` had no upper bound, so a fresh
+        #           install resolved mcp 2.x, which dropped the
+        #           `mcp.server.fastmcp` entry point this server imports
+        #           at module load. Every console script died instantly.
+        #
+        # Note `pip install` (not `uv sync`) and a venv with no checkout
+        # on the path: resolving dependencies *afresh* rather than from
+        # the lockfile is the entire point — that's what a user gets.
+        env:
+          LLM_USAGE_DB_URL: sqlite:////tmp/smoke/usage.db
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet dist/*.whl
+
+          # 1. Console scripts start at all — catches import-time
+          #    breakage from a dependency that moved underneath us.
+          /tmp/smoke/bin/llm-usage --version
+
+          # 2. First boot from a *packaged* install: alembic upgrade
+          #    resolved relative to the installed package, then pricing
+          #    materialization. This is the v0.1.0 path exactly. No CLI
+          #    command triggers it (the servers do, and they block), so
+          #    call it directly.
+          /tmp/smoke/bin/python -c "from llm_usage.bootstrap import bootstrap; bootstrap()"
+
+          # 3. The bootstrap actually populated something — a migration
+          #    that "succeeds" against an empty catalog is not a pass.
+          /tmp/smoke/bin/llm-usage models | head -5
+          /tmp/smoke/bin/llm-usage status
+
+      - name: Publish to PyPI (Trusted Publishing)
+        # No token. `uv publish` detects the Actions OIDC environment and
+        # exchanges the id-token for a short-lived PyPI credential.
+        # Requires a one-time trusted publisher registered on PyPI —
+        # see the setup notes in docs/releasing.md.
+        run: uv publish
+
+      - name: Install mcp-publisher
+        env:
+          # Pinned rather than "latest" so a registry CLI release can't
+          # change publish behavior underneath a tagged release. Bump
+          # deliberately. 1.7.9 is what this repo publishes with locally.
+          MCP_PUBLISHER_VERSION: "1.7.9"
+        run: |
+          # Asset name carries no version — the version lives only in the
+          # release tag. Verified against the v1.7.9 release assets.
+          curl -fsSL \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+          ./mcp-publisher --version
+
+      - name: Publish to the Official MCP Registry
+        # `github-oidc` authenticates the `io.github.zhaoyue722/*`
+        # namespace against this repository's OIDC identity — the
+        # namespace matches the repo owner, so no secret is involved.
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish server.json
