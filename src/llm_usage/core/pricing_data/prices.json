@@ -78,7 +78,7 @@
   },
   "claude-3-haiku-20240307": {
     "cache_creation_input_token_cost": 3E-7,
-    "cache_creation_input_token_cost_above_1hr": 0.000006,
+    "cache_creation_input_token_cost_above_1hr": 5E-7,
     "cache_read_input_token_cost": 3E-8,
     "deprecation_date": "2026-04-20",
     "input_cost_per_token": 2.5E-7,
@@ -97,7 +97,7 @@
   },
   "claude-3-opus-20240229": {
     "cache_creation_input_token_cost": 0.00001875,
-    "cache_creation_input_token_cost_above_1hr": 0.000006,
+    "cache_creation_input_token_cost_above_1hr": 0.00003,
     "cache_read_input_token_cost": 0.0000015,
     "deprecation_date": "2026-01-05",
     "input_cost_per_token": 0.000015,
@@ -194,6 +194,7 @@
       "search_context_size_low": 0.01,
       "search_context_size_medium": 0.01
     },
+    "source": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
     "supports_adaptive_thinking": true,
     "supports_assistant_prefill": false,
     "supports_computer_use": true,
@@ -272,6 +273,9 @@
     "mode": "chat",
     "output_cost_per_token": 0.00005,
     "prompt_cache_min_tokens": 512,
+    "provider_specific_entry": {
+      "us": 1.1
+    },
     "search_context_cost_per_query": {
       "search_context_size_high": 0.01,
       "search_context_size_low": 0.01,
@@ -308,6 +312,9 @@
     "mode": "chat",
     "output_cost_per_token": 0.00005,
     "prompt_cache_min_tokens": 512,
+    "provider_specific_entry": {
+      "us": 1.1
+    },
     "search_context_cost_per_query": {
       "search_context_size_high": 0.01,
       "search_context_size_low": 0.01,
@@ -491,7 +498,6 @@
     "output_cost_per_token": 0.000025,
     "prompt_cache_min_tokens": 4096,
     "provider_specific_entry": {
-      "fast": 6.0,
       "us": 1.1
     },
     "search_context_cost_per_query": {
@@ -503,6 +509,7 @@
     "supports_assistant_prefill": false,
     "supports_computer_use": true,
     "supports_function_calling": true,
+    "supports_legacy_thinking": true,
     "supports_max_reasoning_effort": true,
     "supports_native_structured_output": true,
     "supports_output_config": true,
@@ -528,7 +535,6 @@
     "output_cost_per_token": 0.000025,
     "prompt_cache_min_tokens": 4096,
     "provider_specific_entry": {
-      "fast": 6.0,
       "us": 1.1
     },
     "search_context_cost_per_query": {
@@ -540,6 +546,7 @@
     "supports_assistant_prefill": false,
     "supports_computer_use": true,
     "supports_function_calling": true,
+    "supports_legacy_thinking": true,
     "supports_max_reasoning_effort": true,
     "supports_native_structured_output": true,
     "supports_output_config": true,
@@ -565,7 +572,6 @@
     "output_cost_per_token": 0.000025,
     "prompt_cache_min_tokens": 2048,
     "provider_specific_entry": {
-      "fast": 6.0,
       "us": 1.1
     },
     "search_context_cost_per_query": {
@@ -604,7 +610,6 @@
     "output_cost_per_token": 0.000025,
     "prompt_cache_min_tokens": 2048,
     "provider_specific_entry": {
-      "fast": 6.0,
       "us": 1.1
     },
     "search_context_cost_per_query": {
@@ -691,6 +696,7 @@
       "search_context_size_low": 0.01,
       "search_context_size_medium": 0.01
     },
+    "source": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
     "supports_adaptive_thinking": true,
     "supports_assistant_prefill": false,
     "supports_computer_use": true,
@@ -823,6 +829,9 @@
     "mode": "chat",
     "output_cost_per_token": 0.000015,
     "prompt_cache_min_tokens": 1024,
+    "provider_specific_entry": {
+      "us": 1.1
+    },
     "search_context_cost_per_query": {
       "search_context_size_high": 0.01,
       "search_context_size_low": 0.01,
@@ -832,6 +841,7 @@
     "supports_assistant_prefill": true,
     "supports_computer_use": true,
     "supports_function_calling": true,
+    "supports_legacy_thinking": true,
     "supports_max_reasoning_effort": true,
     "supports_native_structured_output": true,
     "supports_output_config": true,
@@ -863,6 +873,7 @@
       "search_context_size_low": 0.01,
       "search_context_size_medium": 0.01
     },
+    "source": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
     "supports_adaptive_thinking": true,
     "supports_assistant_prefill": false,
     "supports_computer_use": true,
@@ -1966,6 +1977,32 @@
     "supports_tool_choice": true,
     "supports_vision": false
   },
+  "deepseek-v4-flash-vision-exp": {
+    "cache_creation_input_token_cost": 0.0,
+    "cache_read_input_token_cost": 1.4E-8,
+    "input_cost_per_token": 4.4E-7,
+    "input_cost_per_token_cache_hit": 1.4E-8,
+    "litellm_provider": "deepseek",
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 393216,
+    "max_tokens": 393216,
+    "mode": "chat",
+    "output_cost_per_token": 0.00000132,
+    "source": "https://api-docs.deepseek.com/quick_start/pricing",
+    "supported_endpoints": [
+      "/v1/chat/completions"
+    ],
+    "supports_assistant_prefill": true,
+    "supports_function_calling": true,
+    "supports_native_streaming": true,
+    "supports_parallel_function_calling": true,
+    "supports_prompt_caching": true,
+    "supports_reasoning": true,
+    "supports_response_schema": true,
+    "supports_system_messages": true,
+    "supports_tool_choice": true,
+    "supports_vision": true
+  },
   "deepseek-v4-pro": {
     "cache_creation_input_token_cost": 0.0,
     "cache_read_input_token_cost": 4.4E-8,
@@ -2125,6 +2162,32 @@
     "supports_system_messages": true,
     "supports_tool_choice": true,
     "supports_vision": false
+  },
+  "deepseek/deepseek-v4-flash-vision-exp": {
+    "cache_creation_input_token_cost": 0.0,
+    "cache_read_input_token_cost": 1.4E-8,
+    "input_cost_per_token": 4.4E-7,
+    "input_cost_per_token_cache_hit": 1.4E-8,
+    "litellm_provider": "deepseek",
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 393216,
+    "max_tokens": 393216,
+    "mode": "chat",
+    "output_cost_per_token": 0.00000132,
+    "source": "https://api-docs.deepseek.com/quick_start/pricing",
+    "supported_endpoints": [
+      "/v1/chat/completions"
+    ],
+    "supports_assistant_prefill": true,
+    "supports_function_calling": true,
+    "supports_native_streaming": true,
+    "supports_parallel_function_calling": true,
+    "supports_prompt_caching": true,
+    "supports_reasoning": true,
+    "supports_response_schema": true,
+    "supports_system_messages": true,
+    "supports_tool_choice": true,
+    "supports_vision": true
   },
   "deepseek/deepseek-v4-pro": {
     "cache_creation_input_token_cost": 0.0,
@@ -3631,6 +3694,7 @@
   "gpt-5.1": {
     "cache_read_input_token_cost": 1.25E-7,
     "cache_read_input_token_cost_priority": 2.5E-7,
+    "default_reasoning_effort": "none",
     "input_cost_per_token": 0.00000125,
     "input_cost_per_token_priority": 0.0000025,
     "litellm_provider": "openai",
@@ -3675,6 +3739,7 @@
   "gpt-5.1-2025-11-13": {
     "cache_read_input_token_cost": 1.25E-7,
     "cache_read_input_token_cost_priority": 2.5E-7,
+    "default_reasoning_effort": "none",
     "input_cost_per_token": 0.00000125,
     "input_cost_per_token_priority": 0.0000025,
     "litellm_provider": "openai",
@@ -3719,6 +3784,7 @@
   "gpt-5.1-chat-latest": {
     "cache_read_input_token_cost": 1.25E-7,
     "cache_read_input_token_cost_priority": 2.5E-7,
+    "default_reasoning_effort": "none",
     "deprecation_date": "2026-07-23",
     "input_cost_per_token": 0.00000125,
     "input_cost_per_token_priority": 0.0000025,
@@ -3890,6 +3956,7 @@
   "gpt-5.2": {
     "cache_read_input_token_cost": 1.75E-7,
     "cache_read_input_token_cost_priority": 3.5E-7,
+    "default_reasoning_effort": "none",
     "input_cost_per_token": 0.00000175,
     "input_cost_per_token_priority": 0.0000035,
     "litellm_provider": "openai",
@@ -3935,6 +4002,7 @@
   "gpt-5.2-2025-12-11": {
     "cache_read_input_token_cost": 1.75E-7,
     "cache_read_input_token_cost_priority": 3.5E-7,
+    "default_reasoning_effort": "none",
     "input_cost_per_token": 0.00000175,
     "input_cost_per_token_priority": 0.0000035,
     "litellm_provider": "openai",
@@ -4233,6 +4301,7 @@
     "cache_read_input_token_cost_above_272k_tokens": 5E-7,
     "cache_read_input_token_cost_flex": 1.3E-7,
     "cache_read_input_token_cost_priority": 5E-7,
+    "default_reasoning_effort": "none",
     "input_cost_per_token": 0.0000025,
     "input_cost_per_token_above_272k_tokens": 0.000005,
     "input_cost_per_token_batches": 0.00000125,
@@ -4281,6 +4350,7 @@
     "cache_read_input_token_cost_above_272k_tokens": 5E-7,
     "cache_read_input_token_cost_flex": 1.3E-7,
     "cache_read_input_token_cost_priority": 5E-7,
+    "default_reasoning_effort": "none",
     "input_cost_per_token": 0.0000025,
     "input_cost_per_token_above_272k_tokens": 0.000005,
     "input_cost_per_token_batches": 0.00000125,
@@ -4328,6 +4398,7 @@
     "cache_read_input_token_cost": 7.5E-8,
     "cache_read_input_token_cost_flex": 3.75E-8,
     "cache_read_input_token_cost_priority": 1.5E-7,
+    "default_reasoning_effort": "none",
     "input_cost_per_token": 7.5E-7,
     "input_cost_per_token_batches": 3.75E-7,
     "input_cost_per_token_flex": 3.75E-7,
@@ -4379,6 +4450,7 @@
     "cache_read_input_token_cost": 7.5E-8,
     "cache_read_input_token_cost_flex": 3.75E-8,
     "cache_read_input_token_cost_priority": 1.5E-7,
+    "default_reasoning_effort": "none",
     "input_cost_per_token": 7.5E-7,
     "input_cost_per_token_batches": 3.75E-7,
     "input_cost_per_token_flex": 3.75E-7,
@@ -4429,6 +4501,7 @@
   "gpt-5.4-nano": {
     "cache_read_input_token_cost": 2E-8,
     "cache_read_input_token_cost_flex": 1E-8,
+    "default_reasoning_effort": "none",
     "input_cost_per_token": 2E-7,
     "input_cost_per_token_batches": 1E-7,
     "input_cost_per_token_flex": 1E-7,
@@ -4477,6 +4550,7 @@
   "gpt-5.4-nano-2026-03-17": {
     "cache_read_input_token_cost": 2E-8,
     "cache_read_input_token_cost_flex": 1E-8,
+    "default_reasoning_effort": "none",
     "input_cost_per_token": 2E-7,
     "input_cost_per_token_batches": 1E-7,
     "input_cost_per_token_flex": 1E-7,
