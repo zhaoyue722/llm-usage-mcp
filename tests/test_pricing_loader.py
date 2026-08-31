@@ -481,7 +481,7 @@ def test_load_vendored_includes_deepseek_v4_flash() -> None:
     """The vendored catalog prices deepseek-v4-flash correctly.
 
     Values come straight from LiteLLM now (no local override needed —
-    see api-docs.deepseek.com). Input $0.14/M, output $0.28/M.
+    see api-docs.deepseek.com). Input $0.44/M, output $1.32/M.
     """
     records = load_vendored_pricing(fetched_at=1)
     v4_flash = next(
@@ -489,21 +489,20 @@ def test_load_vendored_includes_deepseek_v4_flash() -> None:
         None,
     )
     assert v4_flash is not None
-    assert v4_flash.input_per_million_usd == pytest.approx(0.14)
-    assert v4_flash.output_per_million_usd == pytest.approx(0.28)
-    # Cache hit $0.0028/M; cache creation is $0 (DeepSeek bills writes
+    assert v4_flash.input_per_million_usd == pytest.approx(0.44)
+    assert v4_flash.output_per_million_usd == pytest.approx(1.32)
+    # Cache hit $0.014/M; cache creation is $0 (DeepSeek bills writes
     # at the regular input rate, no separate creation line item).
-    assert v4_flash.cache_read_per_million_usd == pytest.approx(0.0028)
+    assert v4_flash.cache_read_per_million_usd == pytest.approx(0.014)
     assert v4_flash.cache_write_per_million_usd == 0.0
 
 
 def test_load_vendored_includes_deepseek_v4_pro() -> None:
     """The vendored catalog prices deepseek-v4-pro correctly.
 
-    Real DeepSeek rates (api-docs.deepseek.com): input $0.435/M, output
-    $0.87/M, cache hit $0.003625/M. The earlier local override pinned
-    $1.74/$3.48 on a wrong "post-promo" guess; LiteLLM now carries the
-    real numbers, so the override was dropped.
+    Current DeepSeek rates (api-docs.deepseek.com): input $1.32/M, output
+    $3.96/M, cache hit $0.044/M. LiteLLM carries these values directly,
+    so no local override is needed.
     """
     records = load_vendored_pricing(fetched_at=1)
     v4_pro = next(
@@ -511,7 +510,7 @@ def test_load_vendored_includes_deepseek_v4_pro() -> None:
         None,
     )
     assert v4_pro is not None
-    assert v4_pro.input_per_million_usd == pytest.approx(0.435)
-    assert v4_pro.output_per_million_usd == pytest.approx(0.87)
-    assert v4_pro.cache_read_per_million_usd == pytest.approx(0.003625)
+    assert v4_pro.input_per_million_usd == pytest.approx(1.32)
+    assert v4_pro.output_per_million_usd == pytest.approx(3.96)
+    assert v4_pro.cache_read_per_million_usd == pytest.approx(0.044)
     assert v4_pro.cache_write_per_million_usd == 0.0
