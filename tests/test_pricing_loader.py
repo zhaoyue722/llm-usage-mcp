@@ -481,7 +481,7 @@ def test_load_vendored_includes_deepseek_v4_flash() -> None:
     """The vendored catalog prices deepseek-v4-flash correctly.
 
     Values come straight from LiteLLM now (no local override needed —
-    see api-docs.deepseek.com). Input $0.44/M, output $1.32/M.
+    see api-docs.deepseek.com). Input $0.30/M, output $1.20/M.
     """
     records = load_vendored_pricing(fetched_at=1)
     v4_flash = next(
@@ -489,11 +489,11 @@ def test_load_vendored_includes_deepseek_v4_flash() -> None:
         None,
     )
     assert v4_flash is not None
-    assert v4_flash.input_per_million_usd == pytest.approx(0.44)
-    assert v4_flash.output_per_million_usd == pytest.approx(1.32)
-    # Cache hit $0.014/M; cache creation is $0 (DeepSeek bills writes
+    assert v4_flash.input_per_million_usd == pytest.approx(0.30)
+    assert v4_flash.output_per_million_usd == pytest.approx(1.20)
+    # Cache hit $0.006/M; cache creation is $0 (DeepSeek bills writes
     # at the regular input rate, no separate creation line item).
-    assert v4_flash.cache_read_per_million_usd == pytest.approx(0.014)
+    assert v4_flash.cache_read_per_million_usd == pytest.approx(0.006)
     assert v4_flash.cache_write_per_million_usd == 0.0
 
 
