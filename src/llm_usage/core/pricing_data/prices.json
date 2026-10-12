@@ -76,6 +76,7 @@
     "supports_sampling_params": false,
     "supports_tool_choice": true,
     "supports_vision": true,
+    "supports_web_search": true,
     "supports_xhigh_reasoning_effort": true,
     "thinking_always_on": true
   },
@@ -121,6 +122,7 @@
     "supports_sampling_params": false,
     "supports_tool_choice": true,
     "supports_vision": true,
+    "supports_web_search": true,
     "supports_xhigh_reasoning_effort": true,
     "thinking_always_on": true
   },
@@ -177,7 +179,63 @@
     "supports_reasoning": true,
     "supports_response_schema": true,
     "supports_tool_choice": true,
-    "supports_vision": true
+    "supports_vision": true,
+    "supports_web_search": true
+  },
+  "claude-haiku-5-5": {
+    "cache_creation_input_token_cost": 1.25E-7,
+    "cache_creation_input_token_cost_above_100k_tokens": 6.25E-7,
+    "cache_creation_input_token_cost_above_100k_tokens_batches": 3.125E-7,
+    "cache_creation_input_token_cost_above_1hr": 2E-7,
+    "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 0.000001,
+    "cache_creation_input_token_cost_batches": 6.25E-8,
+    "cache_read_input_token_cost": 1E-8,
+    "cache_read_input_token_cost_above_100k_tokens": 5E-8,
+    "cache_read_input_token_cost_above_100k_tokens_batches": 2.5E-8,
+    "cache_read_input_token_cost_batches": 5E-9,
+    "input_cost_per_token": 1E-7,
+    "input_cost_per_token_above_100k_tokens": 5E-7,
+    "input_cost_per_token_above_100k_tokens_batches": 2.5E-7,
+    "input_cost_per_token_batches": 5E-8,
+    "litellm_provider": "anthropic",
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "max_tokens": 128000,
+    "mode": "chat",
+    "output_cost_per_token": 5E-7,
+    "output_cost_per_token_above_100k_tokens": 0.0000025,
+    "output_cost_per_token_above_100k_tokens_batches": 0.00000125,
+    "output_cost_per_token_batches": 2.5E-7,
+    "prompt_cache_min_tokens": 512,
+    "provider_specific_entry": {
+      "us": 1.1
+    },
+    "search_context_cost_per_query": {
+      "search_context_size_high": 0.01,
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.01
+    },
+    "source": "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+    "supports_adaptive_thinking": true,
+    "supports_anthropic_compaction": true,
+    "supports_assistant_prefill": false,
+    "supports_computer_use": true,
+    "supports_forced_tool_use": true,
+    "supports_function_calling": true,
+    "supports_max_reasoning_effort": true,
+    "supports_mid_conversation_system": true,
+    "supports_native_structured_output": true,
+    "supports_output_config": true,
+    "supports_pdf_input": true,
+    "supports_prompt_caching": true,
+    "supports_reasoning": true,
+    "supports_response_schema": true,
+    "supports_sampling_params": false,
+    "supports_tool_choice": true,
+    "supports_vision": true,
+    "supports_web_search": true,
+    "supports_xhigh_reasoning_effort": true,
+    "thinking_always_on": false
   },
   "claude-mythos-5": {
     "cache_creation_input_token_cost": 0.0000125,
@@ -375,7 +433,8 @@
     "supports_response_schema": true,
     "supports_thinking_cache_preservation": true,
     "supports_tool_choice": true,
-    "supports_vision": true
+    "supports_vision": true,
+    "supports_web_search": true
   },
   "claude-opus-4-6": {
     "cache_creation_input_token_cost": 0.00000625,
@@ -418,7 +477,8 @@
     "supports_speed": true,
     "supports_thinking_cache_preservation": true,
     "supports_tool_choice": true,
-    "supports_vision": true
+    "supports_vision": true,
+    "supports_web_search": true
   },
   "claude-opus-4-6-20260205": {
     "cache_creation_input_token_cost": 0.00000625,
@@ -504,6 +564,7 @@
     "supports_thinking_cache_preservation": true,
     "supports_tool_choice": true,
     "supports_vision": true,
+    "supports_web_search": true,
     "supports_xhigh_reasoning_effort": true
   },
   "claude-opus-4-7-20260416": {
@@ -594,6 +655,7 @@
     "supports_thinking_cache_preservation": true,
     "supports_tool_choice": true,
     "supports_vision": true,
+    "supports_web_search": true,
     "supports_xhigh_reasoning_effort": true
   },
   "claude-opus-5": {
@@ -641,6 +703,7 @@
     "supports_thinking_cache_preservation": true,
     "supports_tool_choice": true,
     "supports_vision": true,
+    "supports_web_search": true,
     "supports_xhigh_reasoning_effort": true
   },
   "claude-opus-5-5": {
@@ -660,7 +723,8 @@
     "output_cost_per_token_batches": 0.00001,
     "prompt_cache_min_tokens": 512,
     "provider_specific_entry": {
-      "fast": 2.0
+      "fast": 2,
+      "us": 1.1
     },
     "search_context_cost_per_query": {
       "search_context_size_high": 0.01,
@@ -687,33 +751,25 @@
     "supports_speed": true,
     "supports_tool_choice": true,
     "supports_vision": true,
+    "supports_web_search": true,
     "supports_xhigh_reasoning_effort": true,
     "thinking_always_on": true
   },
   "claude-sonnet-4-5": {
     "cache_creation_input_token_cost": 0.00000375,
     "cache_creation_input_token_cost_above_1hr": 0.000006,
-    "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 0.000012,
-    "cache_creation_input_token_cost_above_200k_tokens": 0.0000075,
-    "cache_creation_input_token_cost_above_200k_tokens_batches": 0.00000375,
     "cache_creation_input_token_cost_batches": 0.000001875,
     "cache_read_input_token_cost": 3E-7,
-    "cache_read_input_token_cost_above_200k_tokens": 6E-7,
-    "cache_read_input_token_cost_above_200k_tokens_batches": 3E-7,
     "cache_read_input_token_cost_batches": 1.5E-7,
     "deprecation_date": "2026-11-30",
     "input_cost_per_token": 0.000003,
-    "input_cost_per_token_above_200k_tokens": 0.000006,
-    "input_cost_per_token_above_200k_tokens_batches": 0.000003,
     "input_cost_per_token_batches": 0.0000015,
     "litellm_provider": "anthropic",
-    "max_input_tokens": 1000000,
+    "max_input_tokens": 200000,
     "max_output_tokens": 64000,
     "max_tokens": 64000,
     "mode": "chat",
     "output_cost_per_token": 0.000015,
-    "output_cost_per_token_above_200k_tokens": 0.0000225,
-    "output_cost_per_token_above_200k_tokens_batches": 0.00001125,
     "output_cost_per_token_batches": 0.0000075,
     "prompt_cache_min_tokens": 1024,
     "search_context_cost_per_query": {
@@ -736,27 +792,18 @@
   "claude-sonnet-4-5-20250929": {
     "cache_creation_input_token_cost": 0.00000375,
     "cache_creation_input_token_cost_above_1hr": 0.000006,
-    "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 0.000012,
-    "cache_creation_input_token_cost_above_200k_tokens": 0.0000075,
-    "cache_creation_input_token_cost_above_200k_tokens_batches": 0.00000375,
     "cache_creation_input_token_cost_batches": 0.000001875,
     "cache_read_input_token_cost": 3E-7,
-    "cache_read_input_token_cost_above_200k_tokens": 6E-7,
-    "cache_read_input_token_cost_above_200k_tokens_batches": 3E-7,
     "cache_read_input_token_cost_batches": 1.5E-7,
     "deprecation_date": "2026-11-30",
     "input_cost_per_token": 0.000003,
-    "input_cost_per_token_above_200k_tokens": 0.000006,
-    "input_cost_per_token_above_200k_tokens_batches": 0.000003,
     "input_cost_per_token_batches": 0.0000015,
     "litellm_provider": "anthropic",
-    "max_input_tokens": 1000000,
+    "max_input_tokens": 200000,
     "max_output_tokens": 64000,
     "max_tokens": 64000,
     "mode": "chat",
     "output_cost_per_token": 0.000015,
-    "output_cost_per_token_above_200k_tokens": 0.0000225,
-    "output_cost_per_token_above_200k_tokens_batches": 0.00001125,
     "output_cost_per_token_batches": 0.0000075,
     "prompt_cache_min_tokens": 1024,
     "search_context_cost_per_query": {
@@ -817,7 +864,8 @@
     "supports_response_schema": true,
     "supports_thinking_cache_preservation": true,
     "supports_tool_choice": true,
-    "supports_vision": true
+    "supports_vision": true,
+    "supports_web_search": true
   },
   "claude-sonnet-5": {
     "cache_creation_input_token_cost": 0.0000025,
@@ -861,14 +909,15 @@
     "supports_thinking_cache_preservation": true,
     "supports_tool_choice": true,
     "supports_vision": true,
+    "supports_web_search": true,
     "supports_xhigh_reasoning_effort": true
   },
   "claude-sonnet-5-5": {
     "cache_creation_input_token_cost": 0.0000025,
     "cache_creation_input_token_cost_above_1hr": 0.000004,
     "cache_creation_input_token_cost_batches": 0.00000125,
-    "cache_read_input_token_cost": 2E-7,
-    "cache_read_input_token_cost_batches": 1E-7,
+    "cache_read_input_token_cost": 1E-7,
+    "cache_read_input_token_cost_batches": 5E-8,
     "input_cost_per_token": 0.000002,
     "input_cost_per_token_batches": 0.000001,
     "litellm_provider": "anthropic",
@@ -887,7 +936,7 @@
       "search_context_size_low": 0.01,
       "search_context_size_medium": 0.01
     },
-    "source": "https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing",
     "supports_adaptive_thinking": true,
     "supports_anthropic_compaction": true,
     "supports_assistant_prefill": false,
@@ -5655,7 +5704,8 @@
     "supported_endpoints": [
       "/v1/chat/completions",
       "/v1/batch",
-      "/v1/responses"
+      "/v1/responses",
+      "/v1/decisions"
     ],
     "supported_modalities": [
       "text",
@@ -5764,25 +5814,31 @@
     "cache_creation_input_token_cost_above_272k_tokens_batches": 0.0000025,
     "cache_creation_input_token_cost_above_272k_tokens_flex": 0.0000025,
     "cache_creation_input_token_cost_above_272k_tokens_priority": 0.00001,
+    "cache_creation_input_token_cost_above_272k_tokens_ultrafast": 0.00003,
     "cache_creation_input_token_cost_batches": 0.00000125,
     "cache_creation_input_token_cost_flex": 0.00000125,
     "cache_creation_input_token_cost_priority": 0.000005,
+    "cache_creation_input_token_cost_ultrafast": 0.000015,
     "cache_read_input_token_cost": 1E-7,
     "cache_read_input_token_cost_above_272k_tokens": 2E-7,
     "cache_read_input_token_cost_above_272k_tokens_batches": 1E-7,
     "cache_read_input_token_cost_above_272k_tokens_flex": 1E-7,
     "cache_read_input_token_cost_above_272k_tokens_priority": 4E-7,
+    "cache_read_input_token_cost_above_272k_tokens_ultrafast": 0.0000012,
     "cache_read_input_token_cost_batches": 5E-8,
     "cache_read_input_token_cost_flex": 5E-8,
     "cache_read_input_token_cost_priority": 2E-7,
+    "cache_read_input_token_cost_ultrafast": 6E-7,
     "input_cost_per_token": 0.000002,
     "input_cost_per_token_above_272k_tokens": 0.000004,
     "input_cost_per_token_above_272k_tokens_batches": 0.000002,
     "input_cost_per_token_above_272k_tokens_flex": 0.000002,
     "input_cost_per_token_above_272k_tokens_priority": 0.000008,
+    "input_cost_per_token_above_272k_tokens_ultrafast": 0.000024,
     "input_cost_per_token_batches": 0.000001,
     "input_cost_per_token_flex": 0.000001,
     "input_cost_per_token_priority": 0.000004,
+    "input_cost_per_token_ultrafast": 0.000012,
     "litellm_provider": "openai",
     "max_input_tokens": 922000,
     "max_output_tokens": 128000,
@@ -5793,9 +5849,11 @@
     "output_cost_per_token_above_272k_tokens_batches": 0.0000075,
     "output_cost_per_token_above_272k_tokens_flex": 0.0000075,
     "output_cost_per_token_above_272k_tokens_priority": 0.00003,
+    "output_cost_per_token_above_272k_tokens_ultrafast": 0.00009,
     "output_cost_per_token_batches": 0.000005,
     "output_cost_per_token_flex": 0.000005,
     "output_cost_per_token_priority": 0.00002,
+    "output_cost_per_token_ultrafast": 0.00006,
     "regional_processing_uplift_multiplier_eu": 1.1,
     "regional_processing_uplift_multiplier_us": 1.1,
     "search_context_cost_per_query": {
@@ -6095,6 +6153,14 @@
     "supports_tool_choice": true,
     "supports_vision": true,
     "supports_web_search": true
+  },
+  "gpt-rosalind-discovery": {
+    "cache_read_input_token_cost": 5E-7,
+    "input_cost_per_token": 0.000005,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "output_cost_per_token": 0.000025,
+    "source": "https://developers.openai.com/api/docs/pricing"
   },
   "gpt-rosalind-research": {
     "cache_read_input_token_cost": 5E-7,
