@@ -132,6 +132,54 @@
     "supports_xhigh_reasoning_effort": true,
     "thinking_always_on": true
   },
+  "claude-fable-5-2": {
+    "cache_creation_input_token_cost": 0.00001,
+    "cache_creation_input_token_cost_above_1hr": 0.000016,
+    "cache_creation_input_token_cost_batches": 0.000005,
+    "cache_read_input_token_cost": 2E-7,
+    "cache_read_input_token_cost_batches": 1E-7,
+    "input_cost_per_token": 0.000008,
+    "input_cost_per_token_batches": 0.000004,
+    "litellm_provider": "anthropic",
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "mode": "chat",
+    "output_cost_per_token": 0.00004,
+    "output_cost_per_token_batches": 0.00002,
+    "prompt_cache_min_tokens": 512.0,
+    "provider_specific_entry": {
+      "fast": 2,
+      "us": 1.1
+    },
+    "search_context_cost_per_query": {
+      "search_context_size_high": 0.01,
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.01
+    },
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "supports_adaptive_thinking": true,
+    "supports_anthropic_compaction": true,
+    "supports_assistant_prefill": false,
+    "supports_computer_use": true,
+    "supports_fast_mode": true,
+    "supports_forced_tool_use": false,
+    "supports_function_calling": true,
+    "supports_max_reasoning_effort": true,
+    "supports_mid_conversation_system": true,
+    "supports_native_structured_output": true,
+    "supports_output_config": true,
+    "supports_pdf_input": true,
+    "supports_prompt_caching": true,
+    "supports_reasoning": true,
+    "supports_response_schema": true,
+    "supports_sampling_params": false,
+    "supports_speed": true,
+    "supports_tool_choice": true,
+    "supports_vision": true,
+    "supports_web_search": true,
+    "supports_xhigh_reasoning_effort": true,
+    "thinking_always_on": true
+  },
   "claude-haiku-4-5": {
     "cache_creation_input_token_cost": 0.00000125,
     "cache_creation_input_token_cost_above_1hr": 0.000002,
@@ -323,6 +371,53 @@
     "supports_reasoning": true,
     "supports_response_schema": true,
     "supports_sampling_params": false,
+    "supports_tool_choice": true,
+    "supports_vision": true,
+    "supports_xhigh_reasoning_effort": true,
+    "thinking_always_on": true
+  },
+  "claude-mythos-5-2": {
+    "cache_creation_input_token_cost": 0.00001,
+    "cache_creation_input_token_cost_above_1hr": 0.000016,
+    "cache_creation_input_token_cost_batches": 0.000005,
+    "cache_read_input_token_cost": 2E-7,
+    "cache_read_input_token_cost_batches": 1E-7,
+    "input_cost_per_token": 0.000008,
+    "input_cost_per_token_batches": 0.000004,
+    "litellm_provider": "anthropic",
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "mode": "chat",
+    "output_cost_per_token": 0.00004,
+    "output_cost_per_token_batches": 0.00002,
+    "prompt_cache_min_tokens": 512,
+    "provider_specific_entry": {
+      "fast": 2,
+      "us": 1.1
+    },
+    "search_context_cost_per_query": {
+      "search_context_size_high": 0.01,
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.01
+    },
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "supports_adaptive_thinking": true,
+    "supports_anthropic_compaction": true,
+    "supports_assistant_prefill": false,
+    "supports_computer_use": true,
+    "supports_fast_mode": true,
+    "supports_forced_tool_use": false,
+    "supports_function_calling": true,
+    "supports_max_reasoning_effort": true,
+    "supports_mid_conversation_system": true,
+    "supports_native_structured_output": true,
+    "supports_output_config": true,
+    "supports_pdf_input": true,
+    "supports_prompt_caching": true,
+    "supports_reasoning": true,
+    "supports_response_schema": true,
+    "supports_sampling_params": false,
+    "supports_speed": true,
     "supports_tool_choice": true,
     "supports_vision": true,
     "supports_xhigh_reasoning_effort": true,
@@ -3465,6 +3560,7 @@
     "mode": "chat",
     "output_cost_per_audio_token": 0.00002,
     "output_cost_per_token": 6E-7,
+    "successor_model": "gpt-audio-1.5",
     "supports_audio_input": true,
     "supports_audio_output": true,
     "supports_function_calling": true,
@@ -3617,7 +3713,7 @@
       "search_context_size_medium": 0.01
     },
     "source": "https://developers.openai.com/api/docs/pricing",
-    "successor_model": "gpt-5.6-sol",
+    "successor_model": "gpt-6.1-sol",
     "supported_endpoints": [
       "/v1/chat/completions",
       "/v1/batch",
@@ -3678,7 +3774,7 @@
       "search_context_size_medium": 0.01
     },
     "source": "https://developers.openai.com/api/docs/pricing",
-    "successor_model": "gpt-5.6-sol",
+    "successor_model": "gpt-6.1-sol",
     "supported_endpoints": [
       "/v1/chat/completions",
       "/v1/batch",
@@ -3845,7 +3941,7 @@
       "search_context_size_medium": 0.01
     },
     "source": "https://developers.openai.com/api/docs/pricing",
-    "successor_model": "gpt-5.6-terra",
+    "successor_model": "gpt-6.1-terra",
     "supported_endpoints": [
       "/v1/chat/completions",
       "/v1/batch",
@@ -3906,7 +4002,7 @@
       "search_context_size_medium": 0.01
     },
     "source": "https://developers.openai.com/api/docs/pricing",
-    "successor_model": "gpt-5.6-terra",
+    "successor_model": "gpt-6.1-terra",
     "supported_endpoints": [
       "/v1/chat/completions",
       "/v1/batch",
@@ -3964,7 +4060,7 @@
       "search_context_size_medium": 0.01
     },
     "source": "https://developers.openai.com/api/docs/pricing",
-    "successor_model": "gpt-5.6-luna",
+    "successor_model": "gpt-6-luna",
     "supported_endpoints": [
       "/v1/chat/completions",
       "/v1/batch",
@@ -4022,7 +4118,7 @@
       "search_context_size_medium": 0.01
     },
     "source": "https://developers.openai.com/api/docs/pricing",
-    "successor_model": "gpt-5.6-luna",
+    "successor_model": "gpt-6-luna",
     "supported_endpoints": [
       "/v1/chat/completions",
       "/v1/batch",
@@ -4075,7 +4171,7 @@
       "search_context_size_medium": 0.01
     },
     "source": "https://developers.openai.com/api/docs/pricing",
-    "successor_model": "gpt-5.6-sol",
+    "successor_model": "gpt-6.1-sol",
     "supported_endpoints": [
       "/v1/batch",
       "/v1/responses"
@@ -4127,7 +4223,7 @@
       "search_context_size_medium": 0.01
     },
     "source": "https://developers.openai.com/api/docs/pricing",
-    "successor_model": "gpt-5.6-sol",
+    "successor_model": "gpt-6.1-sol",
     "supported_endpoints": [
       "/v1/batch",
       "/v1/responses"
@@ -5516,7 +5612,6 @@
     "fedramp_uplift_multiplier": 1.1,
     "input_cost_per_token": 0.00003,
     "input_cost_per_token_above_272k_tokens": 0.00006,
-    "input_cost_per_token_above_272k_tokens_batches": 0.00003,
     "input_cost_per_token_batches": 0.000015,
     "input_cost_per_token_flex": 0.000015,
     "litellm_provider": "openai",
@@ -5525,7 +5620,6 @@
     "mode": "responses",
     "output_cost_per_token": 0.00018,
     "output_cost_per_token_above_272k_tokens": 0.00027,
-    "output_cost_per_token_above_272k_tokens_batches": 0.000135,
     "output_cost_per_token_batches": 0.00009,
     "output_cost_per_token_flex": 0.00009,
     "reasoning_contexts": [
@@ -6203,13 +6297,16 @@
     "cache_creation_input_token_cost": 0.000025,
     "cache_creation_input_token_cost_above_12hr": 0.00005,
     "cache_read_input_token_cost": 0.000002,
+    "cache_read_input_token_cost_above_272k_tokens": 0.000004,
     "input_cost_per_token": 0.00002,
+    "input_cost_per_token_above_272k_tokens": 0.00004,
     "litellm_provider": "openai",
     "max_input_tokens": 922000,
     "max_output_tokens": 128000,
     "mode": "chat",
     "output_cost_per_token": 0.0001,
-    "source": "https://developers.openai.com/api/docs/models/gpt-6-cyber",
+    "output_cost_per_token_above_272k_tokens": 0.00015,
+    "source": "https://developers.openai.com/api/docs/pricing",
     "supported_endpoints": [
       "/v1/chat/completions",
       "/v1/responses"
@@ -7111,6 +7208,7 @@
     "cache_read_input_token_cost_flex": 2.5E-7,
     "cache_read_input_token_cost_priority": 8.75E-7,
     "deprecation_date": "2026-12-11",
+    "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
     "fedramp_uplift_multiplier": 1.1,
     "input_cost_per_token": 0.000002,
     "input_cost_per_token_batches": 0.000001,
@@ -7137,7 +7235,7 @@
       "search_context_size_medium": 0.01
     },
     "source": "https://developers.openai.com/api/docs/pricing",
-    "successor_model": "gpt-5.6-sol",
+    "successor_model": "gpt-6.1-sol",
     "supported_endpoints": [
       "/v1/responses",
       "/v1/chat/completions",
@@ -7193,7 +7291,7 @@
       "search_context_size_medium": 0.01
     },
     "source": "https://developers.openai.com/api/docs/pricing",
-    "successor_model": "gpt-5.6-sol",
+    "successor_model": "gpt-6.1-sol",
     "supported_endpoints": [
       "/v1/responses",
       "/v1/chat/completions",
@@ -7356,7 +7454,7 @@
       "search_context_size_medium": 0.01
     },
     "source": "https://developers.openai.com/api/docs/pricing",
-    "successor_model": "gpt-5.6-sol",
+    "successor_model": "gpt-6.1-sol",
     "supported_endpoints": [
       "/v1/responses",
       "/v1/batch"
@@ -7403,7 +7501,7 @@
       "search_context_size_medium": 0.01
     },
     "source": "https://developers.openai.com/api/docs/pricing",
-    "successor_model": "gpt-5.6-sol",
+    "successor_model": "gpt-6.1-sol",
     "supported_endpoints": [
       "/v1/responses",
       "/v1/batch"
